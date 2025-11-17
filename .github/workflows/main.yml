@@ -10,7 +10,8 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        suffix: ["-s 0 -p 0", "-s 1 -p 1", "-s 2 -p 2"]
+        suffix: ["-s 0 -p 0", "-s 1 -p 1"]
+        # suffix: ["-s 0 -p 0", "-s 1 -p 1", "-s 2 -p 2"]
 
     steps:
       - name: Clone repo

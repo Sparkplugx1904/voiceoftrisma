@@ -12,14 +12,15 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        suffix: ["-s 3 -p 3", "-s 4 -p 4", "-s 5 -p 5"]
+        suffix: ["-s 3 -p 3"]
+        # suffix: ["-s 3 -p 3", "-s 4 -p 4", "-s 5 -p 5"]
     outputs:
       url_s3p3: ${{ steps.map.outputs.url_s3p3 }}
       id_s3p3:  ${{ steps.map.outputs.id_s3p3 }}
-      url_s4p4: ${{ steps.map.outputs.url_s4p4 }}
-      id_s4p4:  ${{ steps.map.outputs.id_s4p4 }}
-      url_s5p5: ${{ steps.map.outputs.url_s5p5 }}
-      id_s5p5:  ${{ steps.map.outputs.id_s5p5 }}
+      # url_s4p4: ${{ steps.map.outputs.url_s4p4 }}
+      # id_s4p4:  ${{ steps.map.outputs.id_s4p4 }}
+      # url_s5p5: ${{ steps.map.outputs.url_s5p5 }}
+      # id_s5p5:  ${{ steps.map.outputs.id_s5p5 }}
 
     steps:
       - name: Download Python recorder & FFmpeg
@@ -87,8 +88,8 @@ jobs:
       matrix:
         pair:
           - { suffix: "s3p3", url: "${{ needs.record.outputs.url_s3p3 }}", item: "${{ needs.record.outputs.id_s3p3 }}" }
-          - { suffix: "s4p4", url: "${{ needs.record.outputs.url_s4p4 }}", item: "${{ needs.record.outputs.id_s4p4 }}" }
-          - { suffix: "s5p5", url: "${{ needs.record.outputs.url_s5p5 }}", item: "${{ needs.record.outputs.id_s5p5 }}" }
+          # - { suffix: "s4p4", url: "${{ needs.record.outputs.url_s4p4 }}", item: "${{ needs.record.outputs.id_s4p4 }}" }
+          # - { suffix: "s5p5", url: "${{ needs.record.outputs.url_s5p5 }}", item: "${{ needs.record.outputs.id_s5p5 }}" }
 
     steps:
       - name: Clone Whisper-CPP (tanpa dotfiles)
