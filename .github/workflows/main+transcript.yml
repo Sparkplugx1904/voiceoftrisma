@@ -111,7 +111,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install requests pydub internetarchive
+          pip install requirements.txt
           sudo apt install -y internetarchive
 
       - name: Transcribe audio
