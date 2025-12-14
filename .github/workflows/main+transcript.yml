@@ -92,22 +92,13 @@ jobs:
           # - { suffix: "s5p5", url: "${{ needs.record.outputs.url_s5p5 }}", item: "${{ needs.record.outputs.id_s5p5 }}" }
 
     steps:
-      - name: Clone Whisper-CPP (tanpa dotfiles)
-        run: |
-          git clone https://github.com/Sparkplugx1904/Whisper-CPP.git temp_whisper
-          cd temp_whisper
-          shopt -s extglob
-          mv !(.?*) ../
-          cd ..
-          rm -rf temp_whisper
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          repository: Sparkplugx1904/Whisper-CPP
 
       - name: Setup FFmpeg
-        uses: FedericoCarboni/setup-ffmpeg@v3      
-      - name: Setup FFmpeg
-        uses: FedericoCarboni/setup-ffmpeg@v3      
-      - name: Setup FFmpeg
-        uses: FedericoCarboni/setup-ffmpeg@v3      
-
+        uses: FedericoCarboni/setup-ffmpeg@v3
 
       - name: Install dependencies
         run: |
@@ -117,7 +108,7 @@ jobs:
       - name: Transcribe audio
         run: |
           echo "[ INFO ] Transcribing audio_${{ matrix.pair.suffix }}.mp3..."
-          python3 -u transcriptor_cpp.py "${{ matrix.pair.url }}" medium
+          python3 -u transcriptor_cpp.py "${{ matrix.pair.url }}" small
 
       - name: Upload transcript artifact
         uses: actions/upload-artifact@v4
