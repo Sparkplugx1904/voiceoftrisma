@@ -108,7 +108,7 @@ jobs:
       - name: Transcribe audio
         run: |
           echo "[ INFO ] Transcribing audio_${{ matrix.pair.suffix }}.mp3..."
-          python3 -u transcriptor_cpp.py "${{ matrix.pair.url }}" small
+          python3 -u transcriptor_cpp.py "${{ matrix.pair.url }}" medium
 
       - name: Upload transcript artifact
         uses: actions/upload-artifact@v4
