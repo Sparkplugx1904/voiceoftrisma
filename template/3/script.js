@@ -53,7 +53,7 @@ const state = {
   sortDesc: true,
   page: 1,
   totalPages: 1,
-  hitsPerPage: 25,
+  hitsPerPage: 10,
   query: '',
   isSearch: false
 };
@@ -66,7 +66,6 @@ playerEl.className = 'player';
 playerEl.id = 'player';
 playerEl.hidden = true;
 playerEl.innerHTML = `
-  <button id="closePlayerBtn" class="close-btn" style="float:right; margin-bottom:5px;">&times;</button>
   <h4 id="nowTitle">—</h4>
   <p id="nowSub">Memuat pemutar…</p>
   <audio id="audio" controls preload="none" style="width:100%"></audio>
@@ -74,66 +73,6 @@ playerEl.innerHTML = `
 const audioEl = playerEl.querySelector('#audio');
 const nowTitle = playerEl.querySelector('#nowTitle');
 const nowSub = playerEl.querySelector('#nowSub');
-const closePlayerBtn = playerEl.querySelector('#closePlayerBtn');
-
-// Function to detect multi-column mode
-function isMultiColumnMode() {
-  return window.innerWidth > 767;
-}
-
-// Function to show player as toast
-function showPlayerAsToast() {
-  playerEl.classList.add('toast-player');
-  document.body.appendChild(playerEl);
-  playerEl.hidden = false;
-}
-
-// Function to hide player toast
-function hidePlayerToast() {
-  if (playerEl.parentNode === document.body) {
-    document.body.removeChild(playerEl);
-  }
-  playerEl.hidden = true;
-  playerEl.classList.remove('toast-player');
-}
-
-// Close button event
-closePlayerBtn.onclick = () => {
-  hidePlayerToast();
-};
-
-// Function to handle mode switching when window resizes
-function handleModeSwitch() {
-  if (playerEl.hidden) return; // No player visible
-
-  const isCurrentlyToast = playerEl.classList.contains('toast-player');
-  const shouldBeToast = isMultiColumnMode();
-
-  if (isCurrentlyToast && !shouldBeToast) {
-    // Switch from toast to inline
-    hidePlayerToast();
-    // Find the currently playing item and insert above it
-    const playingId = nowSub.textContent;
-    if (playingId && playingId !== '—') {
-      const rows = document.querySelectorAll('.list-group-item');
-      for (const row of rows) {
-        const badge = row.querySelector('.badge-id');
-        if (badge && badge.textContent === playingId) {
-          row.parentNode.insertBefore(playerEl, row);
-          playerEl.hidden = false;
-          break;
-        }
-      }
-    }
-  } else if (!isCurrentlyToast && shouldBeToast) {
-    // Switch from inline to toast
-    if (playerEl.parentNode) playerEl.parentNode.removeChild(playerEl);
-    showPlayerAsToast();
-  }
-}
-
-// Add window resize listener
-window.addEventListener('resize', handleModeSwitch);
 
 async function loadJson(page = 1){
   if(pageCache[page]){
@@ -144,7 +83,6 @@ async function loadJson(page = 1){
     return;
   }
 
-  state.isLoading = true;
   listEl.innerHTML = '<div class="list-group-item text-center"><div class="loading-spinner"></div><span class="loading-text">Memuat data...</span></div>';
 
   const apiUrl = `https://archive.org/services/search/beta/page_production/?page_type=account_details&page_target=@16_i_gede_ananda_pradnyana&page_elements=[%22uploads%22]&hits_per_page=${state.hitsPerPage}&page=${page}&sort=publicdate:desc`;
@@ -171,13 +109,11 @@ async function loadJson(page = 1){
   state.totalPages = Math.ceil(total / state.hitsPerPage);
   state.isSearch = false;
 
-  state.isLoading = false;
   render();
   renderPagination();
 }
 
 async function loadAllJsonForSearch(query) {
-  state.isLoading = true;
   listEl.innerHTML = '<div class="list-group-item text-center"><div class="loading-spinner"></div><span class="loading-text">Memuat semua data untuk pencarian...</span></div>';
 
   const apiUrl = `https://archive.org/services/search/beta/page_production/?page_type=account_details&page_target=@16_i_gede_ananda_pradnyana&page_elements=[%22uploads%22]&hits_per_page=${state.hitsPerPage}&page=1&sort=publicdate:desc`;
@@ -190,7 +126,7 @@ async function loadAllJsonForSearch(query) {
 
   let allHits = [...hits];
   const totalPages = Math.ceil(total / state.hitsPerPage);
-  const maxPages = Math.min(totalPages, 100);
+  const maxPages = Math.min(totalPages, 10); // Limit to 10 pages to avoid too many requests
 
   // Fetch remaining pages
   const promises = [];
@@ -223,44 +159,54 @@ async function loadAllJsonForSearch(query) {
     filteredData = allData.filter(it => (it.tanggal || '').toLowerCase().includes(query) || (it.url || '').toLowerCase().includes(query));
   }
 
-  state.allData = filteredData;
+  state.data = filteredData;
   state.page = 1;
   state.totalPages = Math.ceil(filteredData.length / state.hitsPerPage);
   state.isSearch = true;
   state.query = query;
 
-  // Set current page data
-  const start = (state.page - 1) * state.hitsPerPage;
-  const end = start + state.hitsPerPage;
-  state.data = filteredData.slice(start, end);
-
-  state.isLoading = false;
   render();
   renderPagination();
 }
 
-// Helper: extract base date from title (e.g., "VOT-Denpasar_13-10-25" from "VOT-Denpasar_13-10-25-2.mp3")
-function extractBaseDate(title) {
-  const match = title.match(/VOT-Denpasar_(\d{2}-\d{2}-\d{2})/);
-  return match ? `VOT-Denpasar_${match[1]}` : title;
+// Helper: normalisasi tanggal agar "06-09-25" dan "06-09-2" dianggap sama (prefix 2 digit)
+function normalizeTanggal(tgl) {
+  // Ambil dua digit pertama (dd-mm), ignore hari ke berapa
+  const parts = tgl.split('-');
+  if (parts.length >= 2) return parts[0] + '-' + parts[1];
+  return tgl;
 }
 
 function render(){
+  const q = document.getElementById('q').value.trim().toLowerCase();
   let items = state.data.slice();
-  if(!state.sortDesc) items.reverse();
+  if (state.isSearch) {
+    // data is already filtered, slice for pagination
+    const start = (state.page - 1) * state.hitsPerPage;
+    const end = start + state.hitsPerPage;
+    items = items.slice(start, end);
+  } else {
+    // normal flow
+    if(!state.sortDesc) items.reverse();
+    if(q){
+      items = items.filter(it => (it.tanggal||'').toLowerCase().includes(q) || (it.url||'').toLowerCase().includes(q));
+    }
+  }
 
-  // Grouping by full date (dd-mm-yy)
+  // Grouping by tanggal mirip
   const groups = {};
   const groupDates = {}; // simpan tanggal asli untuk sorting
   for(const it of items){
     const id = getIdentifierFromDetailsUrl(it.url);
     const tglRaw = it.publicdate ? formatDate(it.publicdate) : it.tanggal;
-    const tglNorm = tglRaw; // full dd-mm-yy
+    const tglNorm = tglRaw ? normalizeTanggal(tglRaw) : it.tanggal;
     if(!groups[tglNorm]) groups[tglNorm] = [];
     groups[tglNorm].push({ ...it, id, tglRaw });
-    // Simpan tanggal asli untuk sorting
-    if (!groupDates[tglNorm]) {
-      groupDates[tglNorm] = tglRaw;
+    // Ambil tanggal display (tglRaw terpanjang atau tanggal fallback)
+    let displayTanggal = tglRaw || it.tanggal;
+    // Simpan tanggal asli untuk sorting (ambil yang terpanjang)
+    if (!groupDates[tglNorm] || (displayTanggal.length > groupDates[tglNorm].length)) {
+      groupDates[tglNorm] = displayTanggal;
     }
   }
 
@@ -270,12 +216,14 @@ function render(){
     // Parse ke Date, fallback ke string jika gagal
     const da = groupDates[a];
     const db = groupDates[b];
-    // Format: dd-mm-yy
+    // Format: dd-mm-yy atau dd-mm-y
     function parseTgl(tgl) {
       const parts = tgl.split('-');
       if(parts.length === 3) {
+        // yy bisa 2 digit, tambahkan 20 di depan jika perlu
         let year = parts[2];
-        if(year.length === 2) year = '20' + year;
+        if(year.length === 1) year = '2025'; // fallback
+        else if(year.length === 2) year = '20' + year;
         return new Date(year, parseInt(parts[1])-1, parseInt(parts[0]));
       }
       return new Date(tgl);
@@ -291,6 +239,7 @@ function render(){
 
   if(items.length === 0){
     listEl.innerHTML = `<div class="list-group-item text-center">Tidak ada rekaman atau tidak cocok dengan pencarian.</div>`;
+    renderPagination(); // pastikan pagination tetap muncul
     return;
   }
 
@@ -298,15 +247,11 @@ function render(){
     const group = groups[tglNorm];
     let displayTanggal = groupDates[tglNorm];
 
-    // Container untuk grup tanggal
-    const container = document.createElement('div');
-    container.className = 'date-group-container';
-
     // Baris tanggal
     const dateRow = document.createElement('div');
     dateRow.className = 'date-group-header';
     dateRow.textContent = 'Tanggal: ' + displayTanggal;
-    container.appendChild(dateRow);
+    listEl.appendChild(dateRow);
 
     // Helper to extract datetime string from identifier for sorting
     function extractDateTimeFromId(id) {
@@ -342,16 +287,9 @@ function render(){
       playBtn.className = 'btn btn-success';
       playBtn.textContent = 'Putar';
       playBtn.onclick = async () => {
-        if (isMultiColumnMode()) {
-          // Multi-column: use toast
-          hidePlayerToast(); // Hide any existing toast
-          showPlayerAsToast();
-        } else {
-          // Single-column: insert above row
-          if(playerEl.parentNode) playerEl.parentNode.removeChild(playerEl);
-          row.parentNode.insertBefore(playerEl, row);
-          playerEl.hidden = false;
-        }
+        if(playerEl.parentNode) playerEl.parentNode.removeChild(playerEl);
+        row.parentNode.insertBefore(playerEl, row);
+        playerEl.hidden = false;
         nowTitle.textContent = `${it.title}`;
         nowSub.textContent = it.id ? it.id : '—';
         audioEl.removeAttribute('src');
@@ -373,112 +311,75 @@ function render(){
       row.appendChild(img);
       row.appendChild(meta);
       row.appendChild(playBtn);
-      container.appendChild(row);
+      listEl.appendChild(row);
     }
-
-    listEl.appendChild(container);
   }
+
+  renderPagination(); // pastikan pagination tetap muncul di akhir render
 }
 
-function loadSearchPage(page) {
-  if (!state.allData) return;
-  state.page = page;
-  const start = (page - 1) * state.hitsPerPage;
-  const end = start + state.hitsPerPage;
-  state.data = state.allData.slice(start, end);
-  render();
-  renderPagination();
-}
+function renderPagination() {
+  // Selalu tampilkan pagination jika totalPages > 1
+  if (state.totalPages <= 1) {
+    paginationEl.innerHTML = '';
+    return;
+  }
+  paginationEl.innerHTML = `
+    <nav aria-label="Page navigation">
+      <ul class="pagination" style="margin:0; display:flex; align-items:center; gap:8px; justify-content:center;">
+        <li ${state.page === 1 ? 'class="disabled"' : ''} style="margin-right:8px;">
+          <a href="#" aria-label="Previous" id="prevPageBtn"><span aria-hidden="true">&laquo;</span></a>
+        </li>
+        <li>
+          <input type="text" pattern="[0-9]*" inputmode="numeric" id="pageInput" min="1" max="${state.totalPages}" value="${state.page}" class="page-input" style="width:50px; height:34px; padding:4px; border:1px solid #444; text-align:center; color:inherit;" title="Masukkan nomor halaman" oninput="this.value=this.value.replace(/[^0-9]/g,'')">
+        </li>
+        <li style="padding:0 8px;">
+          <span> / ${state.totalPages}</span>
+        </li>
+        <li ${state.page === state.totalPages ? 'class="disabled"' : ''} style="margin-left:8px;">
+          <a href="#" aria-label="Next" id="nextPageBtn"><span aria-hidden="true">&raquo;</span></a>
+        </li>
+      </ul>
+    </nav>
+  `;
+  // Event tombol prev/next
+  const prevBtn = document.getElementById('prevPageBtn');
+  const nextBtn = document.getElementById('nextPageBtn');
+  const pageInput = document.getElementById('pageInput');
 
-function renderPagination(){
-  paginationEl.innerHTML = '';
-
-  const ul = document.createElement('ul');
-  ul.className = 'pagination';
-
-  // Previous button
-  const prevLi = document.createElement('li');
-  prevLi.className = `page-item ${state.page === 1 ? 'disabled' : ''}`;
-  const prevA = document.createElement('a');
-  prevA.className = 'page-link';
-  prevA.href = '#';
-  prevA.innerHTML = '<i class="fa fa-chevron-left"></i> Previous';
-  prevA.onclick = (e) => {
-    e.preventDefault();
-    if(state.page > 1) {
-      if(state.isSearch) loadSearchPage(state.page - 1);
-      else loadJson(state.page - 1);
-    }
-  };
-  prevLi.appendChild(prevA);
-  ul.appendChild(prevLi);
-
-  // Page numbers
-  const startPage = Math.max(1, state.page - 2);
-  const endPage = Math.min(state.totalPages, state.page + 2);
-
-  for(let i = startPage; i <= endPage; i++){
-    const li = document.createElement('li');
-    li.className = `page-item ${i === state.page ? 'active' : ''}`;
-    const a = document.createElement('a');
-    a.className = 'page-link';
-    a.href = '#';
-    a.textContent = i;
-    a.onclick = (e) => {
+  if (prevBtn) {
+    prevBtn.onclick = (e) => {
       e.preventDefault();
-      if(state.isSearch) loadSearchPage(i);
-      else loadJson(i);
+      if (state.page > 1) loadJson(state.page - 1).catch(err => {
+        listEl.innerHTML = `<div class="list-group-item text-center">${err.message}</div>`;
+        renderPagination();
+      });
     };
-    li.appendChild(a);
-    ul.appendChild(li);
   }
-
-  // Next button
-  const nextLi = document.createElement('li');
-  nextLi.className = `page-item ${state.page === state.totalPages ? 'disabled' : ''}`;
-  const nextA = document.createElement('a');
-  nextA.className = 'page-link';
-  nextA.href = '#';
-  nextA.innerHTML = 'Next →';
-  nextA.onclick = (e) => {
-    e.preventDefault();
-    if(state.page < state.totalPages) {
-      if(state.isSearch) loadSearchPage(state.page + 1);
-      else loadJson(state.page + 1);
-    }
-  };
-  nextLi.appendChild(nextA);
-  ul.appendChild(nextLi);
-
-  paginationEl.appendChild(ul);
-
-  // Page input
-  const input = document.createElement('input');
-  input.type = 'number';
-  input.min = 1;
-  input.max = state.totalPages;
-  input.value = state.page;
-  input.style.width = '60px';
-  input.style.marginLeft = '10px';
-  input.style.display = 'inline-block';
-
-  const goBtn = document.createElement('button');
-  goBtn.textContent = 'Go';
-  goBtn.className = 'btn btn-secondary';
-  goBtn.style.marginLeft = '5px';
-  goBtn.onclick = () => {
-    const page = parseInt(input.value);
-    if (page >= 1 && page <= state.totalPages) {
-      if(state.isSearch) loadSearchPage(page);
-      else loadJson(page);
-    }
-  };
-
-  paginationEl.appendChild(input);
-  paginationEl.appendChild(goBtn);
+  if (nextBtn) {
+    nextBtn.onclick = (e) => {
+      e.preventDefault();
+      if (state.page < state.totalPages) loadJson(state.page + 1).catch(err => {
+        listEl.innerHTML = `<div class="list-group-item text-center">${err.message}</div>`;
+        renderPagination();
+      });
+    };
+  }
+  if (pageInput) {
+    pageInput.addEventListener('change', (e) => {
+      let val = parseInt(e.target.value);
+      if (isNaN(val) || val < 1) val = 1;
+      else if (val > state.totalPages) val = state.totalPages;
+      e.target.value = val;
+      if (val !== state.page) {
+        loadJson(val).catch(err => {
+          listEl.innerHTML = `<div class="list-group-item text-center">${err.message}</div>`;
+          renderPagination();
+        });
+      }
+    });
+  }
 }
-
-
 
 // Remove input event listener on search input to prevent search on typing
 // document.getElementById('q').addEventListener('input', render);
@@ -489,7 +390,6 @@ document.querySelector('.search-btn').addEventListener('click', () => {
   // Clear previous list to prevent flooding
   listEl.innerHTML = '';
   pageCache = {}; // clear cache to force fresh fetch
-  state.allData = [];
   state.page = 1;
   if (query) {
     loadAllJsonForSearch(query);
@@ -505,7 +405,6 @@ document.getElementById('q').addEventListener('keydown', (event) => {
     // Clear previous list to prevent flooding
     listEl.innerHTML = '';
     pageCache = {}; // clear cache to force fresh fetch
-    state.allData = [];
     state.page = 1;
     if (query) {
       loadAllJsonForSearch(query);
@@ -520,20 +419,12 @@ document.getElementById('sortBtn').addEventListener('click', () => {
   document.getElementById('sortBtn').textContent = 'Urut: ' + (state.sortDesc ? 'Terbaru' : 'Terlama');
   render();
 });
-document.getElementById('refreshBtn').addEventListener('click', () => { delete pageCache[state.page]; state.allData = []; state.page = 1; loadJson(state.page); });
+document.getElementById('refreshBtn').addEventListener('click', () => { delete pageCache[state.page]; loadJson(state.page); });
 
 // Initial load on page load
-const urlParams = new URLSearchParams(window.location.search);
-const initialPage = (parseInt(urlParams.get('page')) || 0) + 1;
-const initialQuery = urlParams.get('q');
-state.page = initialPage;
-if (initialQuery) {
-  loadAllJsonForSearch(initialQuery);
-} else {
-  loadJson(initialPage).catch(err => {
-    listEl.innerHTML = `<div class="list-group-item text-center">${err.message}</div>`;
-  });
-}
+loadJson().catch(err => {
+  listEl.innerHTML = `<div class="list-group-item text-center">${err.message}</div>`;
+});
 
 // Stream player fetch logic
 async function loadStreamPlayer() {
