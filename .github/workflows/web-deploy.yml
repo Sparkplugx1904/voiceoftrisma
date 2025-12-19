@@ -1,4 +1,4 @@
-name: Auto Deploy (Curl Method)
+name: Auto Deploy (Sparse Checkout Method)
 
 on:
   push:
@@ -11,35 +11,47 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      # 1. Sparse Checkout untuk mengambil folder template/0 dan file spesifik lainnya
+      - name: Checkout Source Template
+        uses: actions/checkout@v4
+        with:
+          repository: Sparkplugx1904/voiceoftrisma
+          path: source_repo
+          sparse-checkout: |
+            template/0
+            LICENSE
+            README.md
+            template/sitemap.xml
+          sparse-checkout-cone-mode: false
+
       - name: Setup Git identity
         run: |
           git config --global user.name "mp@bot"
           git config --global user.email "mp@bot@noreply.github.com"
 
+      # 2. Clone Target Repo
       - name: Clone web repo
         run: |
           git clone https://x-access-token:${{ secrets.WEB_TOKEN }}@github.com/voiceoftrisma/voiceoftrisma.github.io.git web
 
-      - name: Clear old content
+      # 3. Pindahkan Isi Folder
+      - name: Sync and Clean
         run: |
-          cd web
-          rm -rf ./*
+          # Bersihkan repo target
+          rm -rf web/*
+          
+          # Pindahkan isi dari template/0 ke root web
+          cp -r source_repo/template/0/* web/
+          
+          # Pindahkan file individu ke root web
+          cp source_repo/LICENSE web/
+          cp source_repo/README.md web/
+          cp source_repo/template/sitemap.xml web/
 
-      - name: Checkout template (sparse)
-        uses: actions/checkout@v4
-        with:
-          repository: Sparkplugx1904/voiceoftrisma
-          sparse-checkout: |
-            template/0
-            template/sitemap.xml
-            LICENSE
-            README.md
-          sparse-checkout-cone-mode: false
-          path: template-src
-
+      # 4. Push ke Target
       - name: Commit and push
         run: |
           cd web
           git add .
-          git commit -m "Auto deploy by mp@bot at $(date)" || echo "No changes"
+          git commit -m "Auto deploy via Sparse Checkout at $(date)" || echo "No changes"
           git push origin main
