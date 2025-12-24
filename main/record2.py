@@ -34,7 +34,6 @@ if not MY_ACCESS_KEY or not MY_SECRET_KEY:
 
 def now_wita():
     """Waktu lokal WITA"""
-    # gunakan timezone WITA yang sudah didefinisikan
     return datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=8)))
 
 
@@ -58,16 +57,10 @@ def wait_for_stream(url):
 # Helper filename / chunk
 # ---------------------
 def make_base_no_ext(date_str, suffix):
-    """Bentuk base tanpa ekstensi, misal recordings/VOT-Denpasar_30-08-25-0"""
     return f"recordings/VOT-Denpasar_{date_str}{('-' + suffix) if suffix else ''}"
 
 
 def get_next_chunk_filename(base_no_ext, ext):
-    """
-    Jika base_no_ext.ext belum ada -> kembalikan base_no_ext.ext
-    Jika sudah ada -> cari file base_no_ext_1.ext, base_no_ext_2.ext ... dan kembalikan base_no_ext_{n}.ext
-    """
-    # list semua file di folder recordings yang cocok
     dirpath = os.path.dirname(base_no_ext) or '.'
     base_name = os.path.basename(base_no_ext)
 
@@ -88,17 +81,12 @@ def get_next_chunk_filename(base_no_ext, ext):
                 except:
                     pass
             else:
-                # file tanpa _n (index 0)
                 if max_index < 0:
                     max_index = 0
 
     if not found_any:
-        # belum ada file sama sekali -> pakai base_no_ext.ext
         return f"{base_no_ext}.{ext}"
     else:
-        # jika ada file tanpa _n (index 0) dan tidak ada numeric, set next to 1
-        # jika max_index == 0 berarti base exists -> next is 1
-        # if max_index >=1 -> next is max_index+1
         if max_index < 0:
             next_idx = 1
         else:
@@ -107,10 +95,6 @@ def get_next_chunk_filename(base_no_ext, ext):
 
 
 def list_chunks_ordered(base_no_ext, ext):
-    """
-    Kembalikan daftar file chunk yang cocok, diurutkan berdasarkan mtime (ascending)
-    Hanya file yang cocok pola: base_no_ext(.ext) atau base_no_ext_{n}.ext
-    """
     dirpath = os.path.dirname(base_no_ext) or '.'
     base_name = os.path.basename(base_no_ext)
     pattern = re.compile(r'^' + re.escape(base_name) + r'(?:_(\d+))?\.' + re.escape(ext) + r'$')
@@ -129,21 +113,14 @@ def list_chunks_ordered(base_no_ext, ext):
 
 
 def merge_chunks_to_base(base_no_ext, ext):
-    """
-    Gabungkan semua chunk (base + _n) berurutan menjadi temp file, lalu replace final base (base_no_ext.ext).
-    Hapus semua chunk setelah berhasil.
-    Return path final file atau None jika gagal.
-    """
     chunks = list_chunks_ordered(base_no_ext, ext)
     if not chunks:
         log("[ MERGE ] Tidak ada chunk untuk digabung.")
         return None
 
-    # buat list file untuk ffmpeg concat
     list_txt = os.path.join("recordings", "concat_list.txt")
     with open(list_txt, "w", encoding="utf-8") as f:
         for c in chunks:
-            # ffmpeg concat expects paths, escape single quotes by replacing ' with '"'"'
             safe_path = c.replace("'", "'\"'\"'")
             f.write(f"file '{safe_path}'\n")
 
@@ -151,24 +128,16 @@ def merge_chunks_to_base(base_no_ext, ext):
     final_output = f"{base_no_ext}.{ext}"
 
     try:
-        # gunakan ffmpeg concat tanpa re-encode
         cmd = [
-            "./ffmpeg",
-            "-hide_banner",
-            "-f", "concat",
-            "-safe", "0",
-            "-i", list_txt,
-            "-c", "copy",
-            temp_output
+            "./ffmpeg", "-hide_banner", "-f", "concat", "-safe", "0",
+            "-i", list_txt, "-c", "copy", temp_output
         ]
         log(f"[ MERGE ] Menjalankan ffmpeg concat -> {temp_output}")
         subprocess.run(cmd, check=True)
 
-        # pindahkan temp -> final (overwrite jika ada)
         shutil.move(temp_output, final_output)
         log(f"[ MERGE ] Merge selesai -> {final_output}")
 
-        # hapus semua chunk
         for c in chunks:
             try:
                 os.remove(c)
@@ -176,7 +145,6 @@ def merge_chunks_to_base(base_no_ext, ext):
             except Exception as e:
                 log(f"[ WARN ] Gagal menghapus chunk {c}: {e}")
 
-        # hapus list txt
         try:
             os.remove(list_txt)
         except:
@@ -186,7 +154,6 @@ def merge_chunks_to_base(base_no_ext, ext):
 
     except subprocess.CalledProcessError as e:
         log(f"[ ERROR ] Merge gagal: {e}")
-        # cleanup temp jika ada
         try:
             if os.path.exists(temp_output):
                 os.remove(temp_output)
@@ -196,14 +163,56 @@ def merge_chunks_to_base(base_no_ext, ext):
 
 
 # ---------------------
-# core recording flow (modified)
+# Audio Post-Processing (NEW)
+# ---------------------
+def process_audio(filepath):
+    """
+    Menjalankan filter audio: loudnorm, afftdn, highpass, lowpass.
+    Output menimpa file input (via temp file).
+    """
+    log(f"[ PROCESS ] Memulai audio processing untuk: {filepath}")
+    
+    # Buat nama file sementara
+    temp_processed = filepath + ".processed.mp3"
+    
+    # Perintah sesuai permintaan
+    cmd = [
+        "./ffmpeg",
+        "-y",
+        "-hide_banner",
+        "-i", filepath,
+        "-filter:a", "loudnorm=I=-16:TP=-1.5:LRA=11, afftdn, highpass=f=200, lowpass=f=3000",
+        "-threads", "0",
+        "-c:a", "libmp3lame",
+        "-q:a", "2",
+        temp_processed
+    ]
+
+    try:
+        # Jalankan FFmpeg processing
+        subprocess.run(cmd, check=True)
+        
+        # Jika berhasil, timpa file asli dengan file yang sudah diproses
+        shutil.move(temp_processed, filepath)
+        log(f"[ PROCESS ] Sukses. File {filepath} telah di-overwrite dengan hasil filter.")
+        return True
+        
+    except subprocess.CalledProcessError as e:
+        log(f"[ ERROR ] Gagal memproses audio: {e}")
+        # Hapus temp file jika ada sisa
+        if os.path.exists(temp_processed):
+            os.remove(temp_processed)
+        return False
+
+
+# ---------------------
+# core recording flow
 # ---------------------
 def run_ffmpeg(url, suffix="", position=0):
-    """Rekam stream audio dan upload (akan membuat chunk file, merge di cut-off)"""
+    """Rekam stream audio, proses filter, dan upload"""
     date_str = now_wita().strftime("%d-%m-%y")
     os.makedirs("recordings", exist_ok=True)
 
-    # Deteksi codec
     try:
         codec = subprocess.check_output([
             "./ffprobe", "-v", "error", "-select_streams", "a:0",
@@ -216,23 +225,13 @@ def run_ffmpeg(url, suffix="", position=0):
     ext_map = {"aac": "aac", "mp3": "mp3", "opus": "opus", "vorbis": "ogg"}
     ext = ext_map.get(codec, "bin")
 
-    # base tanpa ekstensi (sesuai format yg kamu minta)
     base_no_ext = make_base_no_ext(date_str, suffix)
-
-    # Tentukan filename chunk yang unik (jika base sudah ada, buat base_1, base_2, ...)
     filename = get_next_chunk_filename(base_no_ext, ext)
 
-    # Jalankan ffmpeg
     cmd = [
-        "./ffmpeg",
-        "-y",  # -y sini boleh tetap ada karena kita tidak akan menimpa existing chunk (filename unik)
-        "-hide_banner",
-        # jangan pakai reconnect yang unlimited di sini; behavior reconnect dikembalikan ke loop/restart
-        "-reconnect", "1",
-        "-reconnect_at_eof", "1",
-        "-reconnect_streamed", "1",
-        "-reconnect_delay_max", "0",
-        "-reconnect_on_network_error", "1",
+        "./ffmpeg", "-y", "-hide_banner",
+        "-reconnect", "1", "-reconnect_at_eof", "1", "-reconnect_streamed", "1",
+        "-reconnect_delay_max", "0", "-reconnect_on_network_error", "1",
         "-reconnect_on_http_error", "4xx,5xx",
         "-timeout", "5000000",
         "-i", url,
@@ -246,7 +245,6 @@ def run_ffmpeg(url, suffix="", position=0):
     log(f"[ RUN ] Mulai rekaman ke {filename}")
     process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, bufsize=1)
 
-    # Log thread untuk ffmpeg
     def log_ffmpeg(proc):
         for line in proc.stderr:
             now = datetime.datetime.now(WITA_TZ).strftime("%H:%M:%S")
@@ -255,7 +253,6 @@ def run_ffmpeg(url, suffix="", position=0):
 
     threading.Thread(target=log_ffmpeg, args=(process,), daemon=True).start()
 
-    # Tunggu hingga jam 18:30 WITA atau ffmpeg berhenti tak terduga
     cutoff_reached = False
     while True:
         now = now_wita()
@@ -277,29 +274,32 @@ def run_ffmpeg(url, suffix="", position=0):
 
     log(f"[ DONE ] Proses ffmpeg berhenti: {filename}")
 
-    # Jika cutoff tercapai -> merge semua chunk untuk base_no_ext menjadi satu file final
+    # Merge Logic
+    filename_to_upload = filename # Default fallback
     if cutoff_reached:
         log("[ MERGE ] Melakukan merge semua chunk menjadi file base final...")
         merged = merge_chunks_to_base(base_no_ext, ext)
         if merged:
             filename_to_upload = merged
         else:
-            # jika merge gagal, pilih file terakhir (chunk) untuk diupload agar tidak kehilangan semua
             log("[ WARN ] Merge gagal, akan upload chunk terakhir sebagai fallback.")
-            filename_to_upload = filename
     else:
-        # normal exit karena ffmpeg crash -> jangan merge, upload chunk yang ada sekarang
         filename_to_upload = filename
+
+    # --- BAGIAN BARU: POST PROCESSING ---
+    log(f"[ POST-PROCESS ] Menjalankan filter audio pada {filename_to_upload}...")
+    # Kita panggil fungsi process_audio yang sudah dibuat di atas
+    # File akan di-overwrite di fungsi tersebut
+    process_audio(filename_to_upload)
+    # ------------------------------------
 
     log(f"[ UPLOAD-PREP ] Siap upload: {filename_to_upload}")
 
-    # Delay sebelum upload (sesuai posisi)
     if position > 0:
         delay = position * 10
         log(f"[ DELAY ] Menunggu {delay} detik sebelum upload...")
         time.sleep(delay)
 
-    # Upload ke archive.org
     archive_url, item_id = upload_to_archive(filename_to_upload)
 
     if archive_url and item_id:
@@ -310,7 +310,7 @@ def run_ffmpeg(url, suffix="", position=0):
 
 
 def upload_to_archive(file_path, retries=5):
-    """Upload file ke archive.org dan hasilkan URL langsung + item_id, retry jika gagal"""
+    """Upload file ke archive.org"""
     log(f"[ UPLOAD ] Mulai upload {file_path} ke archive.org...")
     item_identifier = f"vot-denpasar-{now_wita().strftime('%Y%m%d-%H%M%S')}"
     filename = os.path.basename(file_path)
@@ -350,7 +350,6 @@ def upload_to_archive(file_path, retries=5):
 
 
 def write_env_variables(url, item_id):
-    """Kirim ARCHIVE_URL dan ITEM_ID langsung ke environment GitHub"""
     try:
         if "GITHUB_ENV" in os.environ:
             with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as env_file:
@@ -367,11 +366,10 @@ def write_env_variables(url, item_id):
 def main_recording():
     parser = argparse.ArgumentParser(description="Record stream and upload")
     parser.add_argument("-s", "--suffix", type=str, default="", help="Suffix di akhir nama file")
-    parser.add_argument("-p", "--position", type=int, default=0, help="Posisi untuk delay upload (delay = position * 10 detik)")
+    parser.add_argument("-p", "--position", type=int, default=0, help="Posisi untuk delay upload")
     args = parser.parse_args()
 
     stream_url = "http://i.klikhost.com:8502/stream"
-    # tetap gunakan wait_for_stream sesuai permintaan
     wait_for_stream(stream_url)
     run_ffmpeg(stream_url, args.suffix, args.position)
     log("[ DONE ] Semua tugas selesai.")
@@ -383,7 +381,6 @@ if __name__ == "__main__":
 
     while True:
         now = now_wita()
-
         if (now.hour > 18) or (now.hour == 18 and now.minute >= 30):
             log(f"[ STOP ] Sudah jam {now.strftime('%H:%M')} WITA, hentikan program.")
             break
@@ -395,7 +392,7 @@ if __name__ == "__main__":
 
         now = now_wita()
         if (now.hour > 18) or (now.hour == 18 and now.minute >= 30):
-            log(f"[ STOP ] Setelah recording selesai, sudah jam {now.strftime('%H:%M')} WITA, hentikan program.")
+            log(f"[ STOP ] Setelah recording selesai, sudah jam {now.strftime('%H:%M')} WITA.")
             break
         else:
             log("[ RESTART ] Restarting recording loop...")
