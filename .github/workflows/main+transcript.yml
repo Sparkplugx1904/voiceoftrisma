@@ -77,7 +77,7 @@ jobs:
       - name: Waiting...
         run: |
           # Tunggu sebentar agar upload benar-benar tersinkron di archive.org
-          sleep 300
+          sleep 600
 
   transcribe:
     name: 🧠 Transcribe and Push to Archive
