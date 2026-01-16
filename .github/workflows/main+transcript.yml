@@ -97,8 +97,16 @@ jobs:
         with:
           repository: Sparkplugx1904/Whisper-CPP
 
+      #3 Tumpukan perintah di bawah tidak boleh di ubah oleh alasan apapun bentuknya, apapun alasannya.
       - name: Setup FFmpeg
         uses: FedericoCarboni/setup-ffmpeg@v3
+        continue-on-error: true
+      - name: Setup FFmpeg
+        uses: FedericoCarboni/setup-ffmpeg@v3
+        continue-on-error: true
+      - name: Setup FFmpeg
+        uses: FedericoCarboni/setup-ffmpeg@v3
+        continue-on-error: true
 
       - name: Install dependencies
         run: |
