@@ -48,6 +48,8 @@ document.addEventListener('DOMContentLoaded', () => {
 function renderHome(container, liveManager) {
     container.innerHTML = `
         <div class="home-container">
+            <img src="./madyapadma-voice-of-trisma.svg" alt="Voice of Trisma" style="max-width: 480px; width: 100%; height: auto; margin-bottom: 20px; padding-bottom: 10px;">
+            
             <!-- Big Central Player Button -->
             <button class="central-player-btn" id="btnBigPlay" title="Putar Radio Live">
                 <span class="material-symbols-outlined" id="bigPlayIcon">play_arrow</span>

@@ -41,7 +41,7 @@ export class RepoBrowser {
         const html = `
             <div class="repo-header">
                 <div class="breadcrumb">
-                    <div class="breadcrumb-item" onclick="window.location.hash='#/repo'">Repostory</div>
+                    <div class="breadcrumb-item" onclick="window.location.hash='#/repo'">Repository</div>
                     ${breadcrumbs.map(b => `
                         <span class="breadcrumb-separator">/</span>
                         <div class="breadcrumb-item ${b.active ? 'active' : ''}" 
