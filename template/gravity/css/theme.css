@@ -1,0 +1,81 @@
+/* detailed-theme.css */
+:root {
+    /* MD3 Base Colors - Light Mode (Default) */
+    --md-sys-color-primary: #00668b;
+    --md-sys-color-on-primary: #ffffff;
+    --md-sys-color-primary-container: #c4e7ff;
+    --md-sys-color-on-primary-container: #001e2d;
+
+    --md-sys-color-secondary: #4e616d;
+    --md-sys-color-on-secondary: #ffffff;
+    --md-sys-color-secondary-container: #d1e5f3;
+    --md-sys-color-on-secondary-container: #0a1e28;
+
+    --md-sys-color-background: #f8fdff;
+    --md-sys-color-on-background: #191c1e;
+
+    --md-sys-color-surface: #f8fdff;
+    --md-sys-color-on-surface: #191c1e;
+
+    --md-sys-color-surface-variant: #dde3ea;
+    --md-sys-color-on-surface-variant: #41484d;
+
+    --md-sys-color-outline: #71787e;
+
+    /* Elevations & States */
+    --md-ref-typeface-brand: 'Roboto', sans-serif;
+    --md-ref-typeface-plain: 'Roboto', sans-serif;
+
+    /* Custom */
+    --drawer-width: 280px;
+    --app-bar-height: 64px;
+}
+
+/* Dark Mode Overrides */
+body.dark-mode {
+    --md-sys-color-primary: #7cd0ff;
+    --md-sys-color-on-primary: #00344a;
+    --md-sys-color-primary-container: #004c6a;
+    --md-sys-color-on-primary-container: #c4e7ff;
+
+    --md-sys-color-secondary: #b5c9d7;
+    --md-sys-color-on-secondary: #20333d;
+    --md-sys-color-secondary-container: #364954;
+    --md-sys-color-on-secondary-container: #d1e5f3;
+
+    --md-sys-color-background: #191c1e;
+    --md-sys-color-on-background: #e1e3e5;
+
+    --md-sys-color-surface: #191c1e;
+    --md-sys-color-on-surface: #e1e3e5;
+
+    --md-sys-color-surface-variant: #41484d;
+    --md-sys-color-on-surface-variant: #c1c7ce;
+
+    --md-sys-color-outline: #8b9297;
+}
+
+/* Base Reset */
+body {
+    margin: 0;
+    font-family: var(--md-ref-typeface-plain);
+    background-color: var(--md-sys-color-background);
+    color: var(--md-sys-color-on-background);
+    transition: background-color 0.3s, color 0.3s;
+}
+
+*,
+*::before,
+*::after {
+    box-sizing: border-box;
+}
+
+/* Utility for icons */
+.material-symbols-outlined {
+    font-variation-settings:
+        'FILL' 0,
+        'wght' 400,
+        'GRAD' 0,
+        'opsz' 24;
+    vertical-align: middle;
+}

@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="id">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Voice of Trisma - Material Design</title>
+
+    <!-- Meta tags from original -->
+    <meta name="description"
+        content="Voice of Trisma atau VOT adalah radio komunitas yang dibentuk oleh Madyapadma Journalistic Park SMA Negeri 3 Denpasar.">
+    <meta name="keywords" content="VOT, Voice of Trisma, Radio Trisma, Radio SMA Negeri 3 Denpasar">
+
+    <!-- Icons -->
+    <link rel="icon" href="./madyapadma.svg" type="image/png">
+
+    <!-- Fonts: Roboto for Material Design -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap" rel="stylesheet">
+    <!-- Check strict Material Symbols/Icons if needed, using Google Fonts -->
+    <link rel="stylesheet"
+        href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@24,400,0,0" />
+
+    <!-- Styles -->
+    <link rel="stylesheet" href="css/theme.css">
+    <link rel="stylesheet" href="css/layout.css">
+    <link rel="stylesheet" href="css/style.css">
+</head>
+
+<body>
+
+    <!-- App Container -->
+    <div class="app-container">
+
+        <!-- Navigation Drawer (Sidebar) -->
+        <nav class="navigation-drawer" id="navDrawer">
+            <div class="drawer-header">
+                <img src="./madyapadma-voice-of-trisma.svg" alt="Logo" class="drawer-logo" style="width: auto;">
+                <!-- <span class="drawer-title">Voice of Trisma</span>  Optional: hide text if logo has text -->
+            </div>
+            <div class="drawer-content">
+                <a href="#/" class="nav-item active" data-view="home">
+                    <span class="material-symbols-outlined">home</span>
+                    <span class="nav-label">Beranda</span>
+                </a>
+                <a href="#/repo" class="nav-item" data-view="repo">
+                    <span class="material-symbols-outlined">folder</span>
+                    <span class="nav-label">Repository Audio</span>
+                </a>
+                <a href="https://madyapadma-online.com/" target="_blank" class="nav-item">
+                    <span class="material-symbols-outlined">public</span>
+                    <span class="nav-label">Web Utama</span>
+                </a>
+                <div class="nav-divider"></div>
+                <div class="nav-subtitle">Pengaturan</div>
+                <button class="nav-item" id="themeToggleFromDrawer">
+                    <span class="material-symbols-outlined" id="drawerThemeIcon">dark_mode</span>
+                    <span class="nav-label">Ganti Tema</span>
+                </button>
+            </div>
+            <div class="drawer-footer">
+                <small>&copy; 2026 VOT Denpasar</small>
+            </div>
+        </nav>
+
+        <!-- Scrim for mobile drawer -->
+        <div class="scrim" id="scrim"></div>
+
+        <!-- Main Content Area -->
+        <div class="main-content">
+
+            <!-- Top App Bar -->
+            <header class="top-app-bar">
+                <div class="app-bar-leading">
+                    <button class="icon-button" id="menuBtn">
+                        <span class="material-symbols-outlined">menu</span>
+                    </button>
+                    <span class="page-title" id="pageTitle">Beranda</span>
+                </div>
+                <div class="app-bar-actions">
+                    <button class="icon-button" id="themeToggle">
+                        <span class="material-symbols-outlined" id="themeIcon">dark_mode</span>
+                    </button>
+                    <div class="clock-display" id="clockDisplay">--:-- WITA</div>
+                </div>
+            </header>
+
+            <!-- Scrollable Page Content -->
+            <main class="page-body" id="mainBody">
+                <!-- Content injected via Router -->
+                <div id="app"></div>
+            </main>
+
+        </div>
+
+    </div>
+
+    <!-- Persistent Bottom Audio Player -->
+    <div class="bottom-player-bar" id="audioPlayerBar">
+        <!-- Player will be injected here -->
+    </div>
+
+    <!-- Scripts -->
+    <script type="module" src="js/main.js"></script>
+
+</body>
+
+</html>
