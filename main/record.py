@@ -196,10 +196,14 @@ def main_recording():
     parser = argparse.ArgumentParser(description="Record stream and upload")
     parser.add_argument("-s", "--suffix", type=str, default="", help="Suffix di akhir nama file")
     parser.add_argument("-p", "--position", type=int, default=0, help="Posisi untuk delay upload (delay = position * 10 detik)")
+    parser.add_argument("--skip-check", action="store_true", help="Lewati pengecekan stream, langsung mulai rekam")
     args = parser.parse_args()
 
     stream_url = "http://i.klikhost.com:8502/stream"
-    wait_for_stream(stream_url)
+    if args.skip_check:
+        log("[ SKIP ] Pengecekan stream dilewati, langsung mulai rekam...")
+    else:
+        wait_for_stream(stream_url)
     run_ffmpeg(stream_url, args.suffix, args.position)
     log("[ DONE ] Semua tugas selesai.")
     return True
