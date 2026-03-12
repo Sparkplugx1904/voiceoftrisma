@@ -199,7 +199,7 @@ def main_recording():
     parser.add_argument("--skip-check", action="store_true", help="Lewati pengecekan stream, langsung mulai rekam")
     args = parser.parse_args()
 
-    stream_url = "http://i.klikhost.com:8502/stream"
+    stream_url = "https://i.klikhost.com:7051/stream"
     if args.skip_check:
         log("[ SKIP ] Pengecekan stream dilewati, langsung mulai rekam...")
     else:
