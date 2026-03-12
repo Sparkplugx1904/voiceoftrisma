@@ -1,4 +1,5 @@
 import requests
+import socket
 import subprocess
 import time
 import datetime
@@ -36,19 +37,21 @@ def now_wita():
 
 
 def wait_for_stream(url):
-    """Menunggu stream hingga online"""
-    log(f"[ WAIT ] Menunggu stream {url}")
+    """Menunggu stream hingga online menggunakan TCP socket check (ringan, tanpa HTTP request)"""
+    from urllib.parse import urlparse
+    parsed = urlparse(url)
+    host = parsed.hostname
+    port = parsed.port or 80
+
+    log(f"[ WAIT ] Menunggu stream {host}:{port}")
     while True:
         try:
-            resp = requests.head(url, timeout=10)
-            if resp.status_code == 200:
+            with socket.create_connection((host, port), timeout=5):
                 log(f"[ OK ] Stream tersedia: {url}")
                 return
-            else:
-                log(f"[ ! ] Status {resp.status_code}, coba lagi...")
-        except Exception as e:
-            log(f"[ ! ] Error: {e}")
-        time.sleep(1)
+        except (socket.timeout, ConnectionRefusedError, OSError) as e:
+            log(f"[ ! ] Port belum terbuka: {e}")
+        time.sleep(5)
 
 
 def run_ffmpeg(url, suffix="", position=0):
