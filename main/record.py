@@ -9,6 +9,8 @@ import os
 import argparse
 from internetarchive import upload
 import threading
+import re
+import shutil
 
 # --- Setup dasar ---
 os.system("chmod +x ffmpeg ffprobe")
@@ -54,12 +56,123 @@ def wait_for_stream(url):
         time.sleep(5)
 
 
+# ---------------------
+# Helper filename / chunk
+# ---------------------
+def make_base_no_ext(date_str, suffix):
+    return f"recordings/VOT-Denpasar_{date_str}{('-' + suffix) if suffix else ''}"
+
+
+def get_next_chunk_filename(base_no_ext, ext):
+    dirpath = os.path.dirname(base_no_ext) or '.'
+    base_name = os.path.basename(base_no_ext)
+
+    pattern = re.compile(r'^' + re.escape(base_name) + r'(?:_(\d+))?\.' + re.escape(ext) + r'$')
+
+    max_index = -1
+    found_any = False
+
+    for f in os.listdir(dirpath):
+        m = pattern.match(f)
+        if m:
+            found_any = True
+            if m.group(1):
+                try:
+                    idx = int(m.group(1))
+                    if idx > max_index:
+                        max_index = idx
+                except:
+                    pass
+            else:
+                if max_index < 0:
+                    max_index = 0
+
+    if not found_any:
+        return f"{base_no_ext}.{ext}"
+    else:
+        if max_index < 0:
+            next_idx = 1
+        else:
+            next_idx = max_index + 1
+        return f"{base_no_ext}_{next_idx}.{ext}"
+
+
+def list_chunks_ordered(base_no_ext, ext):
+    dirpath = os.path.dirname(base_no_ext) or '.'
+    base_name = os.path.basename(base_no_ext)
+    pattern = re.compile(r'^' + re.escape(base_name) + r'(?:_(\d+))?\.' + re.escape(ext) + r'$')
+
+    files = []
+    for f in os.listdir(dirpath):
+        if pattern.match(f):
+            full = os.path.join(dirpath, f)
+            try:
+                mtime = os.path.getmtime(full)
+            except:
+                mtime = 0
+            files.append((mtime, full))
+    files.sort(key=lambda x: x[0])
+    return [f for _, f in files]
+
+
+def merge_chunks_to_base(base_no_ext, ext):
+    chunks = list_chunks_ordered(base_no_ext, ext)
+    if not chunks:
+        log("[ MERGE ] Tidak ada chunk untuk digabung.")
+        return None
+
+    list_txt = os.path.join("recordings", "concat_list.txt")
+    with open(list_txt, "w", encoding="utf-8") as f:
+        for c in chunks:
+            safe_path = c.replace("'", "'\"'\"'")
+            f.write(f"file '{safe_path}'\n")
+
+    temp_output = os.path.join("recordings", "__merged_temp__." + ext)
+    final_output = f"{base_no_ext}.{ext}"
+
+    try:
+        cmd = [
+            "./ffmpeg", "-hide_banner", "-f", "concat", "-safe", "0",
+            "-i", list_txt, "-c", "copy", temp_output
+        ]
+        log(f"[ MERGE ] Menjalankan ffmpeg concat -> {temp_output}")
+        subprocess.run(cmd, check=True)
+
+        shutil.move(temp_output, final_output)
+        log(f"[ MERGE ] Merge selesai -> {final_output}")
+
+        for c in chunks:
+            try:
+                os.remove(c)
+                log(f"[ CLEAN ] Menghapus chunk {c}")
+            except Exception as e:
+                log(f"[ WARN ] Gagal menghapus chunk {c}: {e}")
+
+        try:
+            os.remove(list_txt)
+        except:
+            pass
+
+        return final_output
+
+    except subprocess.CalledProcessError as e:
+        log(f"[ ERROR ] Merge gagal: {e}")
+        try:
+            if os.path.exists(temp_output):
+                os.remove(temp_output)
+        except:
+            pass
+        return None
+
+
+# ---------------------
+# core recording flow
+# ---------------------
 def run_ffmpeg(url, suffix="", position=0):
     """Rekam stream audio dan upload"""
     date_str = now_wita().strftime("%d-%m-%y")
     os.makedirs("recordings", exist_ok=True)
 
-    # Deteksi codec
     try:
         codec = subprocess.check_output([
             "./ffprobe", "-v", "error", "-select_streams", "a:0",
@@ -72,17 +185,17 @@ def run_ffmpeg(url, suffix="", position=0):
     ext_map = {"aac": "aac", "mp3": "mp3", "opus": "opus", "vorbis": "ogg"}
     ext = ext_map.get(codec, "bin")
 
-    filename = f"recordings/VOT-Denpasar_{date_str}{('-' + suffix) if suffix else ''}.{ext}"
+    base_no_ext = make_base_no_ext(date_str, suffix)
+    filename = get_next_chunk_filename(base_no_ext, ext)
 
-    # Jalankan ffmpeg
     cmd = [
         "./ffmpeg", "-y", "-hide_banner",
-        "-reconnect", "1", "-reconnect_at_eof", "1",
-        "-reconnect_streamed", "1", "-reconnect_delay_max", "0",
-        "-reconnect_on_network_error", "1",
+        "-reconnect", "1", "-reconnect_at_eof", "1", "-reconnect_streamed", "1",
+        "-reconnect_delay_max", "0", "-reconnect_on_network_error", "1",
         "-reconnect_on_http_error", "4xx,5xx",
         "-timeout", "5000000",
-        "-i", url, "-c", "copy",
+        "-i", url,
+        "-c", "copy",
         "-metadata", f"title=VOT Denpasar {date_str}",
         "-metadata", "artist=VOT Radio Denpasar",
         "-metadata", f"date={date_str}",
@@ -92,7 +205,6 @@ def run_ffmpeg(url, suffix="", position=0):
     log(f"[ RUN ] Mulai rekaman ke {filename}")
     process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, bufsize=1)
 
-    # Log thread untuk ffmpeg
     def log_ffmpeg(proc):
         for line in proc.stderr:
             now = datetime.datetime.now(WITA_TZ).strftime("%H:%M:%S")
@@ -101,13 +213,14 @@ def run_ffmpeg(url, suffix="", position=0):
 
     threading.Thread(target=log_ffmpeg, args=(process,), daemon=True).start()
 
-    # Tunggu hingga jam 18:30 WITA
+    cutoff_reached = False
     while True:
         now = now_wita()
         if now.hour == 18 and now.minute >= 30:
+            cutoff_reached = True
             log(f"[ CUT-OFF ] Sudah 18:30 WITA, hentikan ffmpeg...")
-            process.send_signal(signal.SIGINT)
             try:
+                process.send_signal(signal.SIGINT)
                 process.wait(timeout=10)
             except subprocess.TimeoutExpired:
                 process.kill()
@@ -119,16 +232,26 @@ def run_ffmpeg(url, suffix="", position=0):
 
         time.sleep(1)
 
-    log(f"[ DONE ] Rekaman selesai: {filename}")
+    log(f"[ DONE ] Proses ffmpeg berhenti: {filename}")
 
-    # Delay sebelum upload
+    # Merge Logic
+    filename_to_upload = filename
+    if cutoff_reached:
+        log("[ MERGE ] Melakukan merge semua chunk menjadi file base final...")
+        merged = merge_chunks_to_base(base_no_ext, ext)
+        if merged:
+            filename_to_upload = merged
+        else:
+            log("[ WARN ] Merge gagal, akan upload chunk terakhir sebagai fallback.")
+
+    log(f"[ UPLOAD-PREP ] Siap upload: {filename_to_upload}")
+
     if position > 0:
         delay = position * 10
         log(f"[ DELAY ] Menunggu {delay} detik sebelum upload...")
         time.sleep(delay)
 
-    # Upload ke archive.org
-    archive_url, item_id = upload_to_archive(filename)
+    archive_url, item_id = upload_to_archive(filename_to_upload)
 
     if archive_url and item_id:
         log(f"[ ARCHIVE ] File tersedia di {archive_url}")
@@ -199,7 +322,7 @@ def main_recording():
     parser.add_argument("--skip-check", action="store_true", help="Lewati pengecekan stream, langsung mulai rekam")
     args = parser.parse_args()
 
-    stream_url = "https://i.klikhost.com:7051/stream"
+    stream_url = "http://i.klikhost.com:8502/stream"
     if args.skip_check:
         log("[ SKIP ] Pengecekan stream dilewati, langsung mulai rekam...")
     else:
