@@ -231,9 +231,13 @@ def run_ffmpeg(url, suffix="", position=0):
             break
 
         if process.poll() is not None:
-            log("[ FAIL ] ffmpeg berhenti tak terduga.")
-            break
-
+                    now_check = now_wita()
+                    if now_check.hour >= 18:
+                        cutoff_reached = True
+                        log("[ FAIL ] ffmpeg berhenti — server cut off normal (sudah >= 18:00 WITA).")
+                    else:
+                        log("[ FAIL ] ffmpeg berhenti tak terduga, akan restart...")
+                    break
         time.sleep(1)
 
     log(f"[ DONE ] Proses ffmpeg berhenti: {filename}")
@@ -342,7 +346,7 @@ if __name__ == "__main__":
     while True:
         now = now_wita()
 
-        if (now.hour > 18) or (now.hour == 18 and now.minute >= 30):
+        if now.hour >= 18:  # ← ubah dari > 18 ke >= 18
             log(f"[ STOP ] Sudah jam {now.strftime('%H:%M')} WITA, hentikan program.")
             break
 
@@ -352,7 +356,7 @@ if __name__ == "__main__":
             log(f"[ ERROR ] Terjadi error: {e}")
 
         now = now_wita()
-        if (now.hour > 18) or (now.hour == 18 and now.minute >= 30):
+        if now.hour >= 18:  # ← ubah dari > 18 ke >= 18
             log(f"[ STOP ] Setelah recording selesai, sudah jam {now.strftime('%H:%M')} WITA, hentikan program.")
             break
         else:
