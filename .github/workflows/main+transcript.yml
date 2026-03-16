@@ -13,14 +13,10 @@ jobs:
       fail-fast: false
       matrix:
         suffix: ["-s 0 -p 0"]
-        # suffix: ["-s 3 -p 3", "-s 4 -p 4", "-s 5 -p 5"]
     outputs:
-      url_s3p3: ${{ steps.map.outputs.url_s3p3 }}
-      id_s3p3:  ${{ steps.map.outputs.id_s3p3 }}
-      # url_s4p4: ${{ steps.map.outputs.url_s4p4 }}
-      # id_s4p4:  ${{ steps.map.outputs.id_s4p4 }}
-      # url_s5p5: ${{ steps.map.outputs.url_s5p5 }}
-      # id_s5p5:  ${{ steps.map.outputs.id_s5p5 }}
+      url_s0p0: ${{ steps.map.outputs.url_s0p0 }}
+      id_s0p0:  ${{ steps.map.outputs.id_s0p0 }}
+
 
     steps:
       - name: Download Python recorder & FFmpeg
@@ -46,7 +42,7 @@ jobs:
           MY_SECRET_KEY: ${{ secrets.MY_SECRET_KEY }}
         run: |
           mkdir -p recordings
-          python3 -u record2.py ${{ matrix.suffix }}
+          python3 -u record.py ${{ matrix.suffix }}
 
       - name: Map environment vars to matrix outputs
         id: map
@@ -60,20 +56,10 @@ jobs:
             exit 1
           fi
 
-          # Map ke matrix untuk lintas-job
-          if [[ "${{ matrix.suffix }}" == "-s 3 -p 3" ]]; then
-            echo "url_s3p3=$ARCHIVE_URL" >> $GITHUB_OUTPUT
-            echo "id_s3p3=$ITEM_ID" >> $GITHUB_OUTPUT
-          elif [[ "${{ matrix.suffix }}" == "-s 4 -p 4" ]]; then
-            echo "url_s4p4=$ARCHIVE_URL" >> $GITHUB_OUTPUT
-            echo "id_s4p4=$ITEM_ID" >> $GITHUB_OUTPUT
-          elif [[ "${{ matrix.suffix }}" == "-s 5 -p 5" ]]; then
-            echo "url_s5p5=$ARCHIVE_URL" >> $GITHUB_OUTPUT
-            echo "id_s5p5=$ITEM_ID" >> $GITHUB_OUTPUT
-          fi
+          echo "url_s0p0=$ARCHIVE_URL" >> $GITHUB_OUTPUT
+          echo "id_s0p0=$ITEM_ID" >> $GITHUB_OUTPUT
 
           echo "[ OK ] Environment successfully mapped to job outputs."
-
       - name: Waiting...
         run: |
           # Tunggu sebentar agar upload benar-benar tersinkron di archive.org
@@ -87,9 +73,7 @@ jobs:
       fail-fast: false
       matrix:
         pair:
-          - { suffix: "s3p3", url: "${{ needs.record.outputs.url_s3p3 }}", item: "${{ needs.record.outputs.id_s3p3 }}" }
-          # - { suffix: "s4p4", url: "${{ needs.record.outputs.url_s4p4 }}", item: "${{ needs.record.outputs.id_s4p4 }}" }
-          # - { suffix: "s5p5", url: "${{ needs.record.outputs.url_s5p5 }}", item: "${{ needs.record.outputs.id_s5p5 }}" }
+          - { suffix: "s0p0", url: "${{ needs.record.outputs.url_s0p0 }}", item: "${{ needs.record.outputs.id_s0p0 }}" }
 
     steps:
       - name: Checkout
