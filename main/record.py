@@ -175,12 +175,16 @@ def run_ffmpeg(url, suffix="", position=0):
 
     try:
         codec = subprocess.check_output([
-            "./ffprobe", "-v", "error", "-select_streams", "a:0",
+            "./ffprobe", "-v", "error",
+            "-timeout", "10000000",       # ← tambah ini
+            "-select_streams", "a:0",
             "-show_entries", "stream=codec_name",
             "-of", "default=nokey=1:noprint_wrappers=1", url
-        ]).decode().strip()
-    except subprocess.CalledProcessError:
-        codec = "bin"
+        ], timeout=15).decode().strip()   # ← tambah timeout Python juga
+        log(f"[ CODEC ] Terdeteksi: {codec}")
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+        codec = "mp3"                     # ← default mp3, bukan "bin"
+        log(f"[ CODEC ] Gagal detect, pakai default: {codec}")
 
     ext_map = {"aac": "aac", "mp3": "mp3", "opus": "opus", "vorbis": "ogg"}
     ext = ext_map.get(codec, "bin")
