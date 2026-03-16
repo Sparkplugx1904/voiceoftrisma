@@ -19,7 +19,7 @@ jobs:
 
     steps:
       - name: Setup Cloudflare WARP
-        uses: fscarmen/warp-on-actions@v1
+        uses: fscarmen/warp-on-actions@v1.4
         with:
           stack: ipv4
 
