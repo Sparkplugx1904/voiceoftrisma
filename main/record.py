@@ -40,33 +40,41 @@ def now_wita():
 
 def wait_for_stream(url):
     """
-    Menunggu stream hingga benar-benar siap (HTTP 200).
-    Menggunakan HEAD request agar ringan (tidak mendownload stream).
+    Menunggu stream hingga benar-benar siap dengan mengecek JSON stats.
+    URL yang digunakan: https://i.klikhost.com:8502/stats?json=1
+    Logic: streamstatus == 1 -> ONLINE, streamstatus == 0 -> OFFLINE
     """
-    log(f"[ WAIT ] Menunggu stream benar-benar ONLINE (HTTP 200) di {url}")
+    stats_url = "https://i.klikhost.com:8502/stats?json=1"
+    log(f"[ WAIT ] Menunggu stream ONLINE via JSON stats: {stats_url}")
     
     while True:
         try:
-            # Menggunakan HEAD agar hanya mengambil header saja, sangat ringan.
-            # timeout 3 detik untuk presisi tinggi.
-            response = requests.head(url, timeout=3, allow_redirects=True)
+            # Mengambil data JSON dari stats
+            response = requests.get(stats_url, timeout=5)
             
             if response.status_code == 200:
-                log(f"[ OK ] Stream READY (Status: 200). Melepas ke ffmpeg...")
-                return
-            elif response.status_code == 401:
-                # Jika 401, berarti port buka tapi konten belum siap/masih dikunci
-                print(f"\r\033[33m[ 401 ]\033[0m Server ada tapi belum siaran (Unauthorized)... ", end="", flush=True)
-            else:
-                print(f"\r\033[31m[ {response.status_code} ]\033[0m Status tidak dikenal... ", end="", flush=True)
+                data = response.json()
+                # Mengambil nilai streamstatus (1 = aktif, 0 = tidak aktif)
+                status = data.get("streamstatus", 0)
                 
-        except requests.exceptions.RequestException:
-            # Ini mencakup ConnectionRefused (port tutup) atau Timeout
-            print(f"\r\033[31m[ OFFLINE ]\033[0m Port tertutup atau server mati... ", end="", flush=True)
+                if status == 1:
+                    log(f"[ OK ] Stream STATUS: 1 (ONLINE). Melepas ke ffmpeg...")
+                    return
+                else:
+                    print(f"\r\033[33m[ OFFLINE ]\033[0m Status: 0 (Server Ready, No Broadcast)... ", end="", flush=True)
+            else:
+                print(f"\r\033[31m[ {response.status_code} ]\033[0m Gagal akses stats... ", end="", flush=True)
+                
+        except requests.exceptions.RequestException as e:
+            # Menangani koneksi tertutup, timeout, atau DNS error
+            print(f"\r\033[31m[ ERROR ]\033[0m Tidak bisa akses server stats... ", end="", flush=True)
+        except ValueError:
+            # Menangani jika respon bukan format JSON yang valid
+            print(f"\r\033[31m[ JSON ERR ]\033[0m Format data tidak valid... ", end="", flush=True)
         
-        # Jeda 1-2 detik untuk presisi tinggi sesuai permintaan Anda
+        # Jeda 1.5 detik sesuai permintaan presisi tinggi Anda
         time.sleep(1.5)
-
+        
 # ---------------------
 # Helper filename / chunk
 # ---------------------
