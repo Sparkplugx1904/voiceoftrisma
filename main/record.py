@@ -50,7 +50,7 @@ def wait_for_stream(url):
     while True:
         try:
             # Mengambil data JSON dari stats
-            response = requests.get(stats_url, timeout=5)
+            response = requests.get(stats_url, timeout=5, verify=False)
             
             if response.status_code == 200:
                 data = response.json()
@@ -74,7 +74,7 @@ def wait_for_stream(url):
         
         # Jeda 1.5 detik sesuai permintaan presisi tinggi Anda
         time.sleep(1.5)
-        
+
 # ---------------------
 # Helper filename / chunk
 # ---------------------
