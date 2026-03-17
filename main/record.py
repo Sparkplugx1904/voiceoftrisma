@@ -39,22 +39,33 @@ def now_wita():
 
 
 def wait_for_stream(url):
-    """Menunggu stream hingga online menggunakan TCP socket check (ringan, tanpa HTTP request)"""
-    from urllib.parse import urlparse
-    parsed = urlparse(url)
-    host = parsed.hostname
-    port = parsed.port or 80
-
-    log(f"[ WAIT ] Menunggu stream {host}:{port}")
+    """
+    Menunggu stream hingga benar-benar siap (HTTP 200).
+    Menggunakan HEAD request agar ringan (tidak mendownload stream).
+    """
+    log(f"[ WAIT ] Menunggu stream benar-benar ONLINE (HTTP 200) di {url}")
+    
     while True:
         try:
-            with socket.create_connection((host, port), timeout=5):
-                log(f"[ OK ] Stream tersedia: {url}")
+            # Menggunakan HEAD agar hanya mengambil header saja, sangat ringan.
+            # timeout 3 detik untuk presisi tinggi.
+            response = requests.head(url, timeout=3, allow_redirects=True)
+            
+            if response.status_code == 200:
+                log(f"[ OK ] Stream READY (Status: 200). Melepas ke ffmpeg...")
                 return
-        except (socket.timeout, ConnectionRefusedError, OSError) as e:
-            log(f"[ ! ] Port belum terbuka: {e}")
-        time.sleep(5)
-
+            elif response.status_code == 401:
+                # Jika 401, berarti port buka tapi konten belum siap/masih dikunci
+                print(f"\r\033[33m[ 401 ]\033[0m Server ada tapi belum siaran (Unauthorized)... ", end="", flush=True)
+            else:
+                print(f"\r\033[31m[ {response.status_code} ]\033[0m Status tidak dikenal... ", end="", flush=True)
+                
+        except requests.exceptions.RequestException:
+            # Ini mencakup ConnectionRefused (port tutup) atau Timeout
+            print(f"\r\033[31m[ OFFLINE ]\033[0m Port tertutup atau server mati... ", end="", flush=True)
+        
+        # Jeda 1-2 detik untuk presisi tinggi sesuai permintaan Anda
+        time.sleep(1.5)
 
 # ---------------------
 # Helper filename / chunk
