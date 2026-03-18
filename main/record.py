@@ -1,4 +1,5 @@
 import requests
+import urllib3
 import socket
 import subprocess
 import time
@@ -14,6 +15,9 @@ import shutil
 
 # --- Setup dasar ---
 os.system("chmod +x ffmpeg ffprobe")
+
+# Matikan warning SSL verify=False agar log tidak terganggu
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # Zona waktu WITA (UTC+8)
 WITA_OFFSET = datetime.timedelta(hours=8)
@@ -115,33 +119,28 @@ def wait_for_stream(url):
     """
     stats_url = "https://i.klikhost.com:8502/stats?json=1"
     log(f"[ WAIT ] Menunggu siaran dimulai...")
-    
+
     while True:
         try:
-            # Mengambil data JSON dari stats
             response = requests.get(stats_url, timeout=5, verify=False)
-            
+
             if response.status_code == 200:
                 data = response.json()
-                # Mengambil nilai streamstatus (1 = aktif, 0 = tidak aktif)
                 status = data.get("streamstatus", 0)
-                
+
                 if status == 1:
                     log(f"[ OK ] Siaran terdeteksi! Memulai perekaman...")
                     return
                 else:
-                    log(f"[ OFFLINE ] Server siap, tapi siaran belum dimulai. Menunggu...")
+                    log(f"[ OFFLINE ] Server siap, siaran belum dimulai...")
             else:
-                log(f"[ {response.status_code} ] Server stats tidak merespons dengan benar. Mencoba lagi...")
-                
-        except requests.exceptions.RequestException as e:
-            # Menangani koneksi tertutup, timeout, atau DNS error
-            log(f"[ ERROR ] Tidak dapat menjangkau server. Mencoba lagi...")
+                log(f"[ {response.status_code} ] Server tidak merespons dengan benar...")
+
+        except requests.exceptions.RequestException:
+            log(f"[ ERROR ] Tidak dapat menjangkau server...")
         except ValueError:
-            # Menangani jika respon bukan format JSON yang valid
-            log(f"[ JSON ERR ] Respons server tidak terbaca. Mencoba lagi...")
-        
-        # Jeda 1.5 detik sesuai permintaan presisi tinggi Anda
+            log(f"[ JSON ERR ] Respons server tidak terbaca...")
+
         time.sleep(1.5)
 
 # ---------------------
