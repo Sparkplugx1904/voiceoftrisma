@@ -81,18 +81,25 @@ def log(msg):
 
     # Cari tag di awal pesan (format "[ TAG ]" atau "[TAG]")
     tag_color = BLUE  # default warna jika tag tidak dikenal
+    matched_tag = None
     for tag, color in TAG_COLORS.items():
         if msg.startswith(tag):
             tag_color = color
+            matched_tag = tag
             break
 
-    # Timestamp tetap biru, isi pesan berwarna sesuai tag
+    # Timestamp tetap biru, tag berwarna, teks setelah tag pakai warna default
     ts = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=8))).strftime("%H:%M:%S")
-    print(f"\033[34m[{ts}]\033[0m {tag_color}{msg}{RESET}", flush=True)
+    if matched_tag:
+        rest = msg[len(matched_tag):]
+        print(f"\033[34m[{ts}]\033[0m {tag_color}{matched_tag}{RESET}{rest}", flush=True)
+    else:
+        print(f"\033[34m[{ts}]\033[0m {msg}", flush=True)
 
-if not MY_ACCESS_KEY or not MY_SECRET_KEY:
-    log("[ ERROR ] GitHub secrets MY_ACCESS_KEY atau MY_SECRET_KEY belum diset!")
-    sys.exit(1)
+if "--no-upload" not in sys.argv:
+    if not MY_ACCESS_KEY or not MY_SECRET_KEY:
+        log("[ ERROR ] API key belum diatur. Pastikan MY_ACCESS_KEY dan MY_SECRET_KEY sudah ada di GitHub Secrets.")
+        sys.exit(1)
 
 
 def now_wita():
@@ -107,7 +114,7 @@ def wait_for_stream(url):
     Logic: streamstatus == 1 -> ONLINE, streamstatus == 0 -> OFFLINE
     """
     stats_url = "https://i.klikhost.com:8502/stats?json=1"
-    log(f"[ WAIT ] Menunggu stream ONLINE via JSON stats: {stats_url}")
+    log(f"[ WAIT ] Menunggu siaran dimulai...")
     
     while True:
         try:
@@ -120,19 +127,19 @@ def wait_for_stream(url):
                 status = data.get("streamstatus", 0)
                 
                 if status == 1:
-                    log(f"[ OK ] Stream STATUS: 1 (ONLINE). Melepas ke ffmpeg...")
+                    log(f"[ OK ] Siaran terdeteksi! Memulai perekaman...")
                     return
                 else:
-                    log(f"[ OFFLINE ] Status: 0 (Server Ready, No Broadcast)...")
+                    log(f"[ OFFLINE ] Server siap, tapi siaran belum dimulai. Menunggu...")
             else:
-                log(f"[ {response.status_code} ] Gagal akses stats...")
+                log(f"[ {response.status_code} ] Server stats tidak merespons dengan benar. Mencoba lagi...")
                 
         except requests.exceptions.RequestException as e:
             # Menangani koneksi tertutup, timeout, atau DNS error
-            log(f"[ ERROR ] Tidak bisa akses server stats...")
+            log(f"[ ERROR ] Tidak dapat menjangkau server. Mencoba lagi...")
         except ValueError:
             # Menangani jika respon bukan format JSON yang valid
-            log(f"[ JSON ERR ] Format data tidak valid...")
+            log(f"[ JSON ERR ] Respons server tidak terbaca. Mencoba lagi...")
         
         # Jeda 1.5 detik sesuai permintaan presisi tinggi Anda
         time.sleep(1.5)
@@ -199,7 +206,7 @@ def list_chunks_ordered(base_no_ext, ext):
 def merge_chunks_to_base(base_no_ext, ext):
     chunks = list_chunks_ordered(base_no_ext, ext)
     if not chunks:
-        log("[ MERGE ] Tidak ada chunk untuk digabung.")
+        log("[ MERGE ] Tidak ada chunk yang bisa digabung.")
         return None
 
     list_txt = os.path.join("recordings", "concat_list.txt")
@@ -216,18 +223,18 @@ def merge_chunks_to_base(base_no_ext, ext):
             "./ffmpeg", "-hide_banner", "-f", "concat", "-safe", "0",
             "-i", list_txt, "-c", "copy", temp_output
         ]
-        log(f"[ MERGE ] Menjalankan ffmpeg concat -> {temp_output}")
+        log(f"[ MERGE ] Menggabungkan semua bagian rekaman...")
         subprocess.run(cmd, check=True)
 
         shutil.move(temp_output, final_output)
-        log(f"[ MERGE ] Merge selesai -> {final_output}")
+        log(f"[ MERGE ] Berhasil digabung → {final_output}")
 
         for c in chunks:
             try:
                 os.remove(c)
-                log(f"[ CLEAN ] Menghapus chunk {c}")
+                log(f"[ CLEAN ] File sementara dihapus: {c}")
             except Exception as e:
-                log(f"[ WARN ] Gagal menghapus chunk {c}: {e}")
+                log(f"[ WARN ] Gagal menghapus file sementara {c}: {e}")
 
         try:
             os.remove(list_txt)
@@ -237,7 +244,7 @@ def merge_chunks_to_base(base_no_ext, ext):
         return final_output
 
     except subprocess.CalledProcessError as e:
-        log(f"[ ERROR ] Merge gagal: {e}")
+        log(f"[ ERROR ] Penggabungan rekaman gagal: {e}")
         try:
             if os.path.exists(temp_output):
                 os.remove(temp_output)
@@ -249,7 +256,7 @@ def merge_chunks_to_base(base_no_ext, ext):
 # ---------------------
 # core recording flow
 # ---------------------
-def run_ffmpeg(url, suffix="", position=0):
+def run_ffmpeg(url, suffix="", position=0, no_upload=False):
     """Rekam stream audio dan upload"""
     date_str = now_wita().strftime("%d-%m-%y")
     os.makedirs("recordings", exist_ok=True)
@@ -262,10 +269,10 @@ def run_ffmpeg(url, suffix="", position=0):
             "-show_entries", "stream=codec_name",
             "-of", "default=nokey=1:noprint_wrappers=1", url
         ], timeout=15).decode().strip()   # ← tambah timeout Python juga
-        log(f"[ CODEC ] Terdeteksi: {codec}")
+        log(f"[ CODEC ] Format audio: {codec}")
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
-        codec = "mp3"                     # ← default mp3, bukan "bin"
-        log(f"[ CODEC ] Gagal detect, pakai default: {codec}")
+        codec = "mp3"
+        log(f"[ CODEC ] Tidak dapat mendeteksi format, menggunakan mp3 sebagai default.")
 
     ext_map = {"aac": "aac", "mp3": "mp3", "opus": "opus", "vorbis": "ogg"}
     ext = ext_map.get(codec, "bin")
@@ -287,7 +294,7 @@ def run_ffmpeg(url, suffix="", position=0):
         filename
     ]
 
-    log(f"[ RUN ] Mulai rekaman ke {filename}")
+    log(f"[ RUN ] Rekaman dimulai → {filename}")
     process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, bufsize=1)
 
     def log_ffmpeg(proc):
@@ -301,7 +308,7 @@ def run_ffmpeg(url, suffix="", position=0):
         now = now_wita()
         if now.hour == 18 and now.minute >= 30:
             cutoff_reached = True
-            log(f"[ CUT-OFF ] Sudah 18:30 WITA, hentikan ffmpeg...")
+            log(f"[ CUT-OFF ] Siaran berakhir pukul 18:30 WITA. Menghentikan perekaman...")
             try:
                 process.send_signal(signal.SIGINT)
                 process.wait(timeout=10)
@@ -313,9 +320,9 @@ def run_ffmpeg(url, suffix="", position=0):
                     now_check = now_wita()
                     if now_check.hour >= 18:
                         cutoff_reached = True
-                        log("[ FAIL ] ffmpeg berhenti — server cut off normal (sudah >= 18:00 WITA).")
+                        log("[ FAIL ] Perekaman berhenti — siaran sudah selesai.")
                     else:
-                        log("[ FAIL ] ffmpeg berhenti tak terduga, akan restart...")
+                        log("[ FAIL ] Perekaman berhenti tiba-tiba. Akan segera dimulai ulang...")
                     break
         time.sleep(1)
 
@@ -332,6 +339,10 @@ def run_ffmpeg(url, suffix="", position=0):
             log("[ WARN ] Merge gagal, akan upload chunk terakhir sebagai fallback.")
 
     log(f"[ UPLOAD-PREP ] Siap upload: {filename_to_upload}")
+
+    if no_upload:
+        log(f"[ SKIP ] Mode tanpa upload aktif. File tersimpan di {filename_to_upload}")
+        return
 
     if position > 0:
         delay = position * 10
@@ -407,6 +418,7 @@ def main_recording():
     parser.add_argument("-s", "--suffix", type=str, default="", help="Suffix di akhir nama file")
     parser.add_argument("-p", "--position", type=int, default=0, help="Posisi untuk delay upload (delay = position * 10 detik)")
     parser.add_argument("--skip-check", action="store_true", help="Lewati pengecekan stream, langsung mulai rekam")
+    parser.add_argument("--no-upload", action="store_true", help="Rekam saja tanpa upload ke archive.org")
     args = parser.parse_args()
 
     stream_url = "http://i.klikhost.com:8502/stream"
@@ -414,7 +426,7 @@ def main_recording():
         log("[ SKIP ] Pengecekan stream dilewati, langsung mulai rekam...")
     else:
         wait_for_stream(stream_url)
-    run_ffmpeg(stream_url, args.suffix, args.position)
+    run_ffmpeg(stream_url, args.suffix, args.position, no_upload=args.no_upload)
     log("[ DONE ] Semua tugas selesai.")
     return True
 
