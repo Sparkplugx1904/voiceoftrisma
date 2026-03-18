@@ -24,9 +24,71 @@ MY_ACCESS_KEY = os.environ.get("MY_ACCESS_KEY")
 MY_SECRET_KEY = os.environ.get("MY_SECRET_KEY")
 
 def log(msg):
-    """Tambahkan timestamp biru ke setiap log tanpa ubah isi pesan"""
+    """Tambahkan timestamp + warna otomatis berdasarkan tag di awal pesan"""
+    # ANSI color codes
+    RED     = "\033[31m"
+    GREEN   = "\033[32m"
+    YELLOW  = "\033[33m"
+    BLUE    = "\033[34m"
+    MAGENTA = "\033[35m"
+    CYAN    = "\033[36m"
+    WHITE   = "\033[37m"
+    RESET   = "\033[0m"
+
+    # Mapping tag -> warna pesan
+    TAG_COLORS = {
+        # Merah — error / berhenti paksa
+        "[ ERROR ]"   : RED,
+        "[ FAIL ]"    : RED,
+        "[ STOP ]"    : RED,
+        "[ CUT-OFF ]" : RED,
+
+        # Kuning — peringatan / kondisi menunggu
+        "[ WARN ]"    : YELLOW,
+        "[ OFFLINE ]" : YELLOW,
+        "[ RETRY ]"   : YELLOW,
+        "[ DELAY ]"   : YELLOW,
+        "[ WAIT ]"    : YELLOW,
+
+        # Hijau — sukses / selesai
+        "[ OK ]"      : GREEN,
+        "[ DONE ]"    : GREEN,
+        "[ START ]"   : GREEN,
+        "[ END ]"     : GREEN,
+        "[ ARCHIVE ]" : GREEN,
+        "[ LINK ]"    : GREEN,
+        "[ ITEM ]"    : GREEN,
+        "[ ENV ]"     : GREEN,
+        "[ CLEAN ]"   : GREEN,
+
+        # Cyan — info proses aktif
+        "[ RUN ]"         : CYAN,
+        "[ SKIP ]"        : CYAN,
+        "[ CODEC ]"       : CYAN,
+        "[ UPLOAD-PREP ]" : CYAN,
+
+        # Magenta — upload / transfer data
+        "[ UPLOAD ]"  : MAGENTA,
+        "[ MERGE ]"   : MAGENTA,
+
+        # Putih redup — output eksternal / restart
+        "[FFMPEG]"    : WHITE,
+        "[ RESTART ]" : WHITE,
+
+        # Merah — HTTP / JSON error
+        "[ JSON ERR ]": RED,
+    }
+
+    # Cari tag di awal pesan (format "[ TAG ]" atau "[TAG]")
+    tag_color = BLUE  # default warna jika tag tidak dikenal
+    for tag, color in TAG_COLORS.items():
+        if msg.startswith(tag):
+            tag_color = color
+            break
+
+    # Timestamp tetap biru, isi pesan berwarna sesuai tag
     ts = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=8))).strftime("%H:%M:%S")
-    print(f"\033[34m[{ts}]\033[0m {msg}", flush=True)
+    print(f"\033[34m[{ts}]\033[0m {tag_color}{msg}{RESET}", flush=True)
 
 if not MY_ACCESS_KEY or not MY_SECRET_KEY:
     log("[ ERROR ] GitHub secrets MY_ACCESS_KEY atau MY_SECRET_KEY belum diset!")
