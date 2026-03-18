@@ -61,19 +61,19 @@ def wait_for_stream(url):
                     log(f"[ OK ] Stream STATUS: 1 (ONLINE). Melepas ke ffmpeg...")
                     return
                 else:
-                    log(f"\r\033[33m[ OFFLINE ]\033[0m Status: 0 (Server Ready, No Broadcast)... ", end="", flush=True)
+                    log(f"[ OFFLINE ] Status: 0 (Server Ready, No Broadcast)...")
             else:
-                log(f"\r\033[31m[ {response.status_code} ]\033[0m Gagal akses stats... ", end="", flush=True)
+                log(f"[ {response.status_code} ] Gagal akses stats...")
                 
         except requests.exceptions.RequestException as e:
             # Menangani koneksi tertutup, timeout, atau DNS error
-            log(f"\r\033[31m[ ERROR ]\033[0m Tidak bisa akses server stats... ", end="", flush=True)
+            log(f"[ ERROR ] Tidak bisa akses server stats...")
         except ValueError:
             # Menangani jika respon bukan format JSON yang valid
-            log(f"\r\033[31m[ JSON ERR ]\033[0m Format data tidak valid... ", end="", flush=True)
+            log(f"[ JSON ERR ] Format data tidak valid...")
         
         # Jeda 1.5 detik sesuai permintaan presisi tinggi Anda
-        time.sleep(2)
+        time.sleep(1.5)
 
 # ---------------------
 # Helper filename / chunk
@@ -230,9 +230,7 @@ def run_ffmpeg(url, suffix="", position=0):
 
     def log_ffmpeg(proc):
         for line in proc.stderr:
-            now = datetime.datetime.now(WITA_TZ).strftime("%H:%M:%S")
-            print(f"\r\033[34m[{now}]\033[0m [FFMPEG] {line.strip()}   ", end="", flush=True)
-        print()
+            log(f"[FFMPEG] {line.strip()}")
 
     threading.Thread(target=log_ffmpeg, args=(process,), daemon=True).start()
 
