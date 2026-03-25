@@ -12,6 +12,7 @@ from internetarchive import upload
 import threading
 import re
 import shutil
+import queue
 
 # --- Setup dasar ---
 os.system("chmod +x ffmpeg ffprobe")
@@ -27,100 +28,452 @@ WITA_TZ = datetime.timezone(WITA_OFFSET)
 MY_ACCESS_KEY = os.environ.get("MY_ACCESS_KEY")
 MY_SECRET_KEY = os.environ.get("MY_SECRET_KEY")
 
+# --- Global state ---
+ARGS = None
+TAG_WIDTH = 15
+
+# =============================================
+# True Color ANSI (24-bit RGB)
+# =============================================
+TIME_COLOR = "\033[38;2;139;148;158m"   # #8b949e — abu-abu kebiruan (timestamp)
+INFO_COLOR = "\033[38;2;88;166;255m"    # #58a6ff — biru (info/sukses)
+WARN_COLOR = "\033[38;2;210;153;34m"    # #d29922 — kuning/oranye (peringatan)
+ERR_COLOR  = "\033[38;2;248;81;73m"     # #f85149 — merah (error)
+UP_COLOR   = "\033[38;2;179;137;245m"   # #b389f5 — ungu (upload/merge)
+TEXT_COLOR = "\033[38;2;201;209;217m"    # #c9d1d9 — abu-abu terang (teks utama)
+RESET      = "\033[0m"
+
+TAG_COLORS = {
+    # Red — error / berhenti paksa
+    "[ERROR]"       : ERR_COLOR,
+    "[FAIL]"        : ERR_COLOR,
+    "[STOP]"        : ERR_COLOR,
+    "[CUT-OFF]"     : ERR_COLOR,
+    "[JSON-ERR]"    : ERR_COLOR,
+
+    # Yellow/Orange — peringatan / kondisi menunggu
+    "[WARN]"        : WARN_COLOR,
+    "[OFFLINE]"     : WARN_COLOR,
+    "[RETRY]"       : WARN_COLOR,
+    "[DELAY]"       : WARN_COLOR,
+    "[WAIT]"        : WARN_COLOR,
+
+    # Blue — info, sukses, status positif
+    "[OK]"          : INFO_COLOR,
+    "[DONE]"        : INFO_COLOR,
+    "[START]"       : INFO_COLOR,
+    "[END]"         : INFO_COLOR,
+    "[ARCHIVE]"     : INFO_COLOR,
+    "[LINK]"        : INFO_COLOR,
+    "[ITEM]"        : INFO_COLOR,
+    "[ENV]"         : INFO_COLOR,
+    "[CLEAN]"       : INFO_COLOR,
+    "[RUN]"         : INFO_COLOR,
+    "[SKIP]"        : INFO_COLOR,
+    "[CODEC]"       : INFO_COLOR,
+    "[UPLOAD-PREP]" : INFO_COLOR,
+    "[CMD]"         : INFO_COLOR,
+
+    # Purple — upload / transfer data
+    "[UPLOAD]"      : UP_COLOR,
+    "[MERGE]"       : UP_COLOR,
+
+    # Gray — output eksternal / restart
+    "[FFMPEG]"      : TIME_COLOR,
+    "[RESTART]"     : TIME_COLOR,
+}
+
+
+# =============================================
+# Interactive Console — live commands saat runtime
+# =============================================
+class InteractiveConsole:
+    """
+    Background thread yang membaca input user secara karakter-per-karakter.
+    Selama user mengetik, log di-buffer. Saat Enter ditekan,
+    input user ditampilkan sebagai [CMD] log, lalu buffer di-flush.
+    """
+
+    def __init__(self):
+        self._typing = threading.Event()
+        self._buffer = queue.Queue()
+        self.skip_stage = threading.Event()
+        self._running = True
+        self._lock = threading.Lock()
+
+    def start(self):
+        t = threading.Thread(target=self._input_loop, daemon=True)
+        t.start()
+
+    def is_typing(self):
+        return self._typing.is_set()
+
+    def buffer_log(self, formatted_line):
+        self._buffer.put(formatted_line)
+
+    def flush(self):
+        with self._lock:
+            while not self._buffer.empty():
+                try:
+                    line = self._buffer.get_nowait()
+                    print(line, flush=True)
+                except queue.Empty:
+                    break
+
+    def stop(self):
+        self._running = False
+
+    def _input_loop(self):
+        if sys.platform == "win32":
+            self._win_loop()
+        else:
+            self._unix_loop()
+
+    def _win_loop(self):
+        import msvcrt
+        buf = ""
+        while self._running:
+            try:
+                if msvcrt.kbhit():
+                    ch = msvcrt.getwch()
+
+                    # Ctrl+C
+                    if ch == "\x03":
+                        os.kill(os.getpid(), signal.SIGINT)
+                        break
+
+                    # Enter
+                    if ch in ("\r", "\n"):
+                        self._typing.clear()
+                        # Hapus baris user dari terminal
+                        sys.stdout.write("\r" + " " * (len(buf) + 2) + "\r")
+                        sys.stdout.flush()
+                        if buf.strip():
+                            self._handle_command(buf.strip())
+                        self.flush()
+                        buf = ""
+                        continue
+
+                    # Backspace
+                    if ch == "\x08":
+                        if buf:
+                            buf = buf[:-1]
+                            sys.stdout.write("\b \b")
+                            sys.stdout.flush()
+                        if not buf:
+                            self._typing.clear()
+                            self.flush()
+                        continue
+
+                    # Karakter biasa — mulai typing mode
+                    if not self._typing.is_set():
+                        self._typing.set()
+                    buf += ch
+                    sys.stdout.write(ch)
+                    sys.stdout.flush()
+                else:
+                    time.sleep(0.05)
+            except Exception:
+                time.sleep(0.1)
+
+    def _unix_loop(self):
+        try:
+            import select
+            import termios
+            import tty
+        except ImportError:
+            # Jika termios tidak tersedia (bukan TTY / GitHub Actions), fallback ke input()
+            self._fallback_loop()
+            return
+
+        try:
+            old_settings = termios.tcgetattr(sys.stdin)
+        except termios.error:
+            self._fallback_loop()
+            return
+
+        try:
+            tty.setcbreak(sys.stdin.fileno())
+            buf = ""
+            while self._running:
+                if select.select([sys.stdin], [], [], 0.05)[0]:
+                    ch = sys.stdin.read(1)
+
+                    if ch == "\x03":
+                        os.kill(os.getpid(), signal.SIGINT)
+                        break
+
+                    if ch in ("\r", "\n"):
+                        self._typing.clear()
+                        sys.stdout.write("\r" + " " * (len(buf) + 2) + "\r")
+                        sys.stdout.flush()
+                        if buf.strip():
+                            self._handle_command(buf.strip())
+                        self.flush()
+                        buf = ""
+                        continue
+
+                    if ch in ("\x7f", "\x08"):
+                        if buf:
+                            buf = buf[:-1]
+                            sys.stdout.write("\b \b")
+                            sys.stdout.flush()
+                        if not buf:
+                            self._typing.clear()
+                            self.flush()
+                        continue
+
+                    if not self._typing.is_set():
+                        self._typing.set()
+                    buf += ch
+                    sys.stdout.write(ch)
+                    sys.stdout.flush()
+        except Exception:
+            pass
+        finally:
+            try:
+                termios.tcsetattr(sys.stdin, termios.TCSADRAIN, old_settings)
+            except Exception:
+                pass
+
+    def _fallback_loop(self):
+        """Fallback untuk non-TTY (GitHub Actions, pipe, dll)"""
+        while self._running:
+            try:
+                line = input()
+                if line.strip():
+                    self._handle_command(line.strip())
+            except EOFError:
+                break
+            except Exception:
+                time.sleep(0.5)
+
+    def _handle_command(self, cmd):
+        """Proses perintah user dan tampilkan sebagai [CMD] log"""
+        log(f"[CMD] {cmd}")
+
+        if cmd == "/trigger-warn":
+            trigger_all_tags()
+        elif cmd == "/skip-stage":
+            self.skip_stage.set()
+            log("[SKIP] Stage skip diminta oleh user...")
+        elif cmd == "/help":
+            show_commands_help()
+        else:
+            log(f"[WARN] Perintah tidak dikenal: {cmd}. Ketik /help untuk daftar perintah.")
+
+
+# Global console instance (akan diinisialisasi di __main__ jika stdin = TTY)
+CONSOLE = None
+
+
+def trigger_all_tags():
+    """Trigger satu log untuk setiap jenis tag — demo semua warna sekaligus."""
+    demo_tags = [
+        "[ERROR]", "[FAIL]", "[STOP]", "[CUT-OFF]", "[JSON-ERR]",
+        "[WARN]", "[OFFLINE]", "[RETRY]", "[DELAY]", "[WAIT]",
+        "[OK]", "[DONE]", "[START]", "[END]", "[ARCHIVE]",
+        "[LINK]", "[ITEM]", "[ENV]", "[CLEAN]", "[RUN]",
+        "[SKIP]", "[CODEC]", "[UPLOAD-PREP]",
+        "[UPLOAD]", "[MERGE]",
+        "[FFMPEG]", "[RESTART]",
+    ]
+    for tag in demo_tags:
+        log(f"{tag} Test trigger — demo tag")
+
+
+def show_commands_help():
+    """Tampilkan daftar perintah interaktif yang tersedia."""
+    lines = [
+        "",
+        f"  {INFO_COLOR}/help{RESET}           {TEXT_COLOR}Tampilkan daftar perintah ini{RESET}",
+        f"  {WARN_COLOR}/trigger-warn{RESET}   {TEXT_COLOR}Trigger log demo untuk semua tag (tes warna){RESET}",
+        f"  {ERR_COLOR}/skip-stage{RESET}     {TEXT_COLOR}Skip tahap yang sedang berjalan (wait/record){RESET}",
+        "",
+    ]
+    for l in lines:
+        print(l, flush=True)
+
+
+# =============================================
+# LOG FUNCTION — Verbose Server Log Style
+# =============================================
 def log(msg):
-    """Tambahkan timestamp + warna otomatis berdasarkan tag di awal pesan"""
-    # ANSI color codes
-    RED     = "\033[31m"
-    GREEN   = "\033[32m"
-    YELLOW  = "\033[33m"
-    BLUE    = "\033[34m"
-    MAGENTA = "\033[35m"
-    CYAN    = "\033[36m"
-    WHITE   = "\033[37m"
-    RESET   = "\033[0m"
+    """
+    Verbose Server Log — true color 24-bit, timestamp [YYYY-MM-DD HH:MM:SS],
+    tag berwarna dengan padding fixed-width 15 karakter.
+    Jika user sedang mengetik, log di-buffer hingga Enter ditekan.
+    """
+    if ARGS and ARGS.no_log:
+        return
 
-    # Mapping tag -> warna pesan
-    TAG_COLORS = {
-        # Merah — error / berhenti paksa
-        "[ ERROR ]"   : RED,
-        "[ FAIL ]"    : RED,
-        "[ STOP ]"    : RED,
-        "[ CUT-OFF ]" : RED,
-
-        # Kuning — peringatan / kondisi menunggu
-        "[ WARN ]"    : YELLOW,
-        "[ OFFLINE ]" : YELLOW,
-        "[ RETRY ]"   : YELLOW,
-        "[ DELAY ]"   : YELLOW,
-        "[ WAIT ]"    : YELLOW,
-
-        # Hijau — sukses / selesai
-        "[ OK ]"      : GREEN,
-        "[ DONE ]"    : GREEN,
-        "[ START ]"   : GREEN,
-        "[ END ]"     : GREEN,
-        "[ ARCHIVE ]" : GREEN,
-        "[ LINK ]"    : GREEN,
-        "[ ITEM ]"    : GREEN,
-        "[ ENV ]"     : GREEN,
-        "[ CLEAN ]"   : GREEN,
-
-        # Cyan — info proses aktif
-        "[ RUN ]"         : CYAN,
-        "[ SKIP ]"        : CYAN,
-        "[ CODEC ]"       : CYAN,
-        "[ UPLOAD-PREP ]" : CYAN,
-
-        # Magenta — upload / transfer data
-        "[ UPLOAD ]"  : MAGENTA,
-        "[ MERGE ]"   : MAGENTA,
-
-        # Putih redup — output eksternal / restart
-        "[FFMPEG]"    : WHITE,
-        "[ RESTART ]" : WHITE,
-
-        # Merah — HTTP / JSON error
-        "[ JSON ERR ]": RED,
-    }
-
-    # Cari tag di awal pesan (format "[ TAG ]" atau "[TAG]")
-    tag_color = BLUE  # default warna jika tag tidak dikenal
+    # Deteksi tag di awal pesan
     matched_tag = None
+    tag_color = INFO_COLOR
     for tag, color in TAG_COLORS.items():
         if msg.startswith(tag):
-            tag_color = color
             matched_tag = tag
+            tag_color = color
             break
 
-    # Timestamp tetap biru, tag berwarna, teks setelah tag pakai warna default
-    ts = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=8))).strftime("%H:%M:%S")
-    if matched_tag:
-        rest = msg[len(matched_tag):]
-        print(f"\033[34m[{ts}]\033[0m {tag_color}{matched_tag}{RESET}{rest}", flush=True)
-    else:
-        print(f"\033[34m[{ts}]\033[0m {msg}", flush=True)
+    # Timestamp lengkap WITA
+    ts = datetime.datetime.now(
+        datetime.timezone(datetime.timedelta(hours=8))
+    ).strftime("%Y-%m-%d %H:%M:%S")
 
+    if matched_tag:
+        rest = msg[len(matched_tag):].lstrip()
+        # Padding: lebar tag mentah (tanpa ANSI) tepat TAG_WIDTH karakter
+        padding = " " * max(TAG_WIDTH - len(matched_tag), 1)
+        line = (
+            f"{TIME_COLOR}[{ts}]{RESET} "
+            f"{tag_color}{matched_tag}{RESET}{padding}"
+            f"{TEXT_COLOR}{rest}{RESET}"
+        )
+    else:
+        padding = " " * TAG_WIDTH
+        line = f"{TIME_COLOR}[{ts}]{RESET} {padding}{TEXT_COLOR}{msg}{RESET}"
+
+    # Jika user sedang mengetik, buffer log
+    if CONSOLE and CONSOLE.is_typing():
+        CONSOLE.buffer_log(line)
+    else:
+        print(line, flush=True)
+
+
+# =============================================
+# HELP BANNER
+# =============================================
+def print_help_banner():
+    """Tampilkan banner help dengan semua args yang tersedia"""
+    BOLD = "\033[1m"
+    DIM  = "\033[2m"
+
+    banner = f"""
+{INFO_COLOR}╔══════════════════════════════════════════════════════════════════╗
+║                  {BOLD}VOT Radio Denpasar Recorder{RESET}{INFO_COLOR}                   ║
+╠══════════════════════════════════════════════════════════════════╣{RESET}
+{TEXT_COLOR}  Rekam stream audio dan upload otomatis ke archive.org{RESET}
+{INFO_COLOR}╚══════════════════════════════════════════════════════════════════╝{RESET}
+
+{BOLD}{INFO_COLOR}📋 Opsi Tersedia:{RESET}
+{TIME_COLOR}─────────────────────────────────────────────────────────────────{RESET}
+
+  {WARN_COLOR}-s, --suffix{RESET} {TEXT_COLOR}<TEXT>{RESET}          Suffix di akhir nama file
+  {WARN_COLOR}-p, --position{RESET} {TEXT_COLOR}<INT>{RESET}        Posisi untuk delay upload (delay = N * 10s)
+  {WARN_COLOR}-o{RESET} {TEXT_COLOR}<FILENAME>{RESET}               Nama output file (tanpa path, tanpa ext)
+  {WARN_COLOR}--duration{RESET} {TEXT_COLOR}<SECONDS>{RESET}        Durasi rekaman dalam detik (misal: 10 = 10 detik)
+
+{BOLD}{INFO_COLOR}🌐 Stream & Format:{RESET}
+{TIME_COLOR}─────────────────────────────────────────────────────────────────{RESET}
+
+  {WARN_COLOR}--stream-url{RESET} {TEXT_COLOR}<URL>{RESET}          URL stream kustom
+  {WARN_COLOR}--stream-file-format{RESET} {TEXT_COLOR}<EXT>{RESET}  Format file stream (mp3, wav, aac, dll)
+                               {TIME_COLOR}→ skip ffprobe auto-detection{RESET}
+
+{BOLD}{INFO_COLOR}🔑 Archive.org Credentials:{RESET}
+{TIME_COLOR}─────────────────────────────────────────────────────────────────{RESET}
+
+  {WARN_COLOR}--archive-access, --archive-acc{RESET} {TEXT_COLOR}<KEY>{RESET}  Archive.org access key
+  {WARN_COLOR}--archive-secret, --archive-sec{RESET} {TEXT_COLOR}<KEY>{RESET}  Archive.org secret key
+
+{BOLD}{INFO_COLOR}⏭️  Skip / Disable:{RESET}
+{TIME_COLOR}─────────────────────────────────────────────────────────────────{RESET}
+
+  {WARN_COLOR}--skip-check{RESET}               Lewati pengecekan stream online
+  {WARN_COLOR}--no-timer-limit{RESET}           Abaikan batasan waktu (jam 18:30, dll)
+  {WARN_COLOR}--no-record{RESET}                Skip perekaman ffmpeg
+  {WARN_COLOR}--no-merge-chunks{RESET}          Skip penggabungan chunk rekaman
+  {WARN_COLOR}--no-log{RESET}                   Nonaktifkan semua log output
+  {WARN_COLOR}--no-save{RESET}                  Tidak menyimpan file rekaman
+  {WARN_COLOR}--no-upload{RESET}                Rekam saja tanpa upload ke archive.org
+
+{BOLD}{INFO_COLOR}⌨️  Perintah Interaktif (saat runtime):{RESET}
+{TIME_COLOR}─────────────────────────────────────────────────────────────────{RESET}
+
+  {INFO_COLOR}/help{RESET}                      Tampilkan daftar perintah
+  {WARN_COLOR}/trigger-warn{RESET}              Trigger log demo untuk semua tag
+  {ERR_COLOR}/skip-stage{RESET}                Skip tahap yang sedang berjalan
+"""
+    print(banner, flush=True)
+
+
+# =============================================
+# EARLY VALIDATION (sebelum argparse)
+# =============================================
 if "--no-upload" not in sys.argv:
     if not MY_ACCESS_KEY or not MY_SECRET_KEY:
-        log("[ ERROR ] API key belum diatur. Pastikan MY_ACCESS_KEY dan MY_SECRET_KEY sudah ada di GitHub Secrets.")
-        sys.exit(1)
+        has_custom_keys = any(a in sys.argv for a in [
+            "--archive-access", "--archive-acc", "--archive-secret", "--archive-sec"
+        ])
+        if not has_custom_keys:
+            log("[ERROR] API key belum diatur. Pastikan MY_ACCESS_KEY dan MY_SECRET_KEY sudah ada di GitHub Secrets.")
+            log("[ERROR] Atau gunakan --archive-access dan --archive-secret untuk menyediakan key.")
+            sys.exit(1)
 
 
+# =============================================
+# WAKTU
+# =============================================
 def now_wita():
     """Waktu lokal WITA"""
     return datetime.datetime.now(datetime.UTC).astimezone(WITA_TZ)
 
 
+# =============================================
+# WAIT FOR STREAM
+# =============================================
 def wait_for_stream(url):
     """
-    Menunggu stream hingga benar-benar siap dengan mengecek JSON stats.
-    URL yang digunakan: https://i.klikhost.com:8502/stats?json=1
-    Logic: streamstatus == 1 -> ONLINE, streamstatus == 0 -> OFFLINE
+    Strategi polling bertahap berbasis offset sejak jam :00.
+    Tahap 1:  0– 2 menit → setiap  3 detik
+    Tahap 2:  2– 3 menit → setiap  5 detik
+    Tahap 3:  3– 5 menit → setiap 15 detik
+    Tahap 4:  5–10 menit → setiap 30 detik
+    Tahap 5: 10–60 menit → setiap 60 detik
     """
     stats_url = "https://i.klikhost.com:8502/stats?json=1"
-    log(f"[ WAIT ] Menunggu siaran dimulai...")
+
+    STAGES = [
+        (  0,  120,  3),
+        (120,  180,  5),
+        (180,  300, 15),
+        (300,  600, 30),
+        (600, 3600, 60),
+    ]
+
+    def get_interval(elapsed_seconds):
+        for start, end, interval in STAGES:
+            if start <= elapsed_seconds < end:
+                return interval
+        return 60
+
+    def seconds_since_last_hour():
+        now = now_wita()
+        return now.minute * 60 + now.second
+
+    stage_labels = {3: "0–2 mnt", 5: "2–3 mnt", 15: "3–5 mnt", 30: "5–10 mnt", 60: "10–60 mnt"}
+    last_interval = None
+    last_err = None  # dedup hanya untuk error/warn, bukan OFFLINE
+
+    log("[WAIT] Menunggu siaran — mode polling bertahap aktif...")
 
     while True:
+        # /skip-stage: skip waiting
+        if CONSOLE and CONSOLE.skip_stage.is_set():
+            CONSOLE.skip_stage.clear()
+            log("[SKIP] Wait stage dilewati oleh user.")
+            return
+
+        elapsed = seconds_since_last_hour()
+        interval = get_interval(elapsed)
+        mm, ss = divmod(elapsed, 60)
+
+        # Hanya tampilkan saat transisi tahap, dengan elapsed time
+        if interval != last_interval:
+            log(f"[WAIT] Tahap berubah → +{mm}m {ss:02d}s — interval ping: {interval}s ({stage_labels.get(interval, '?')})")
+            last_interval = interval
+
         try:
             response = requests.get(stats_url, timeout=5, verify=False)
 
@@ -129,23 +482,32 @@ def wait_for_stream(url):
                 status = data.get("streamstatus", 0)
 
                 if status == 1:
-                    log(f"[ OK ] Siaran terdeteksi! Memulai perekaman...")
+                    log("[OK] Siaran terdeteksi! Memulai perekaman...")
                     return
                 else:
-                    log(f"[ OFFLINE ] Server siap, siaran belum dimulai...")
+                    # OFFLINE selalu tampil tiap poll agar user tahu masih aktif
+                    log(f"[OFFLINE] Server merespons — siaran belum dimulai")
+                    last_err = None
             else:
-                log(f"[ {response.status_code} ] Server tidak merespons dengan benar...")
+                if last_err != f"http_{response.status_code}":
+                    log(f"[WARN] Status HTTP {response.status_code}")
+                    last_err = f"http_{response.status_code}"
 
         except requests.exceptions.RequestException:
-            log(f"[ ERROR ] Tidak dapat menjangkau server...")
+            if last_err != "unreachable":
+                log("[ERROR] Tidak dapat menjangkau server...")
+                last_err = "unreachable"
         except ValueError:
-            log(f"[ JSON ERR ] Respons server tidak terbaca...")
+            if last_err != "json_err":
+                log("[JSON-ERR] Respons server tidak terbaca...")
+                last_err = "json_err"
 
-        time.sleep(1.5)
+        time.sleep(interval)
 
-# ---------------------
-# Helper filename / chunk
-# ---------------------
+
+# =============================================
+# HELPER FILENAME / CHUNK
+# =============================================
 def make_base_no_ext(date_str, suffix):
     return f"recordings/VOT-Denpasar_{date_str}{('-' + suffix) if suffix else ''}"
 
@@ -153,7 +515,6 @@ def make_base_no_ext(date_str, suffix):
 def get_next_chunk_filename(base_no_ext, ext):
     dirpath = os.path.dirname(base_no_ext) or '.'
     base_name = os.path.basename(base_no_ext)
-
     pattern = re.compile(r'^' + re.escape(base_name) + r'(?:_(\d+))?\.' + re.escape(ext) + r'$')
 
     max_index = -1
@@ -205,7 +566,7 @@ def list_chunks_ordered(base_no_ext, ext):
 def merge_chunks_to_base(base_no_ext, ext):
     chunks = list_chunks_ordered(base_no_ext, ext)
     if not chunks:
-        log("[ MERGE ] Tidak ada chunk yang bisa digabung.")
+        log("[MERGE] Tidak ada chunk yang bisa digabung.")
         return None
 
     list_txt = os.path.join("recordings", "concat_list.txt")
@@ -222,18 +583,18 @@ def merge_chunks_to_base(base_no_ext, ext):
             "./ffmpeg", "-hide_banner", "-f", "concat", "-safe", "0",
             "-i", list_txt, "-c", "copy", temp_output
         ]
-        log(f"[ MERGE ] Menggabungkan semua bagian rekaman...")
+        log("[MERGE] Menggabungkan semua bagian rekaman...")
         subprocess.run(cmd, check=True)
 
         shutil.move(temp_output, final_output)
-        log(f"[ MERGE ] Berhasil digabung → {final_output}")
+        log(f"[MERGE] Berhasil digabung → {final_output}")
 
         for c in chunks:
             try:
                 os.remove(c)
-                log(f"[ CLEAN ] File sementara dihapus: {c}")
+                log(f"[CLEAN] File sementara dihapus: {c}")
             except Exception as e:
-                log(f"[ WARN ] Gagal menghapus file sementara {c}: {e}")
+                log(f"[WARN] Gagal menghapus file sementara {c}: {e}")
 
         try:
             os.remove(list_txt)
@@ -243,7 +604,7 @@ def merge_chunks_to_base(base_no_ext, ext):
         return final_output
 
     except subprocess.CalledProcessError as e:
-        log(f"[ ERROR ] Penggabungan rekaman gagal: {e}")
+        log(f"[ERROR] Penggabungan rekaman gagal: {e}")
         try:
             if os.path.exists(temp_output):
                 os.remove(temp_output)
@@ -252,33 +613,50 @@ def merge_chunks_to_base(base_no_ext, ext):
         return None
 
 
-# ---------------------
-# core recording flow
-# ---------------------
+# =============================================
+# CORE RECORDING FLOW
+# =============================================
 def run_ffmpeg(url, suffix="", position=0, no_upload=False):
     """Rekam stream audio dan upload"""
+
+    # --no-record: skip seluruh proses ffmpeg
+    if ARGS and ARGS.no_record:
+        log("[SKIP] --no-record aktif. Perekaman ffmpeg dilewati.")
+        return
+
     date_str = now_wita().strftime("%d-%m-%y")
     os.makedirs("recordings", exist_ok=True)
 
-    try:
-        codec = subprocess.check_output([
-            "./ffprobe", "-v", "error",
-            "-timeout", "10000000",       # ← tambah ini
-            "-select_streams", "a:0",
-            "-show_entries", "stream=codec_name",
-            "-of", "default=nokey=1:noprint_wrappers=1", url
-        ], timeout=15).decode().strip()   # ← tambah timeout Python juga
-        log(f"[ CODEC ] Format audio: {codec}")
-    except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
-        codec = "mp3"
-        log(f"[ CODEC ] Tidak dapat mendeteksi format, menggunakan mp3 sebagai default.")
+    # Tentukan format/ext file
+    if ARGS and ARGS.stream_file_format:
+        ext = ARGS.stream_file_format.lower().strip(".")
+        log(f"[CODEC] Format file stream (manual): {ext}")
+    else:
+        try:
+            codec = subprocess.check_output([
+                "./ffprobe", "-v", "error",
+                "-timeout", "10000000",
+                "-select_streams", "a:0",
+                "-show_entries", "stream=codec_name",
+                "-of", "default=nokey=1:noprint_wrappers=1", url
+            ], timeout=15).decode().strip()
+            log(f"[CODEC] Format audio: {codec}")
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+            codec = "mp3"
+            log("[CODEC] Tidak dapat mendeteksi format, menggunakan mp3 sebagai default.")
 
-    ext_map = {"aac": "aac", "mp3": "mp3", "opus": "opus", "vorbis": "ogg"}
-    ext = ext_map.get(codec, "bin")
+        ext_map = {"aac": "aac", "mp3": "mp3", "opus": "opus", "vorbis": "ogg"}
+        ext = ext_map.get(codec, "bin")
 
-    base_no_ext = make_base_no_ext(date_str, suffix)
-    filename = get_next_chunk_filename(base_no_ext, ext)
+    # Tentukan nama file output
+    if ARGS and ARGS.output_name:
+        base_no_ext = f"recordings/{ARGS.output_name}"
+        filename = get_next_chunk_filename(base_no_ext, ext)
+    else:
+        base_no_ext = make_base_no_ext(date_str, suffix)
+        filename = get_next_chunk_filename(base_no_ext, ext)
 
+    # Bangun command ffmpeg
     cmd = [
         "./ffmpeg", "-y", "-hide_banner",
         "-reconnect", "1", "-reconnect_at_eof", "1", "-reconnect_streamed", "1",
@@ -290,10 +668,16 @@ def run_ffmpeg(url, suffix="", position=0, no_upload=False):
         "-metadata", f"title=VOT Denpasar {date_str}",
         "-metadata", "artist=VOT Radio Denpasar",
         "-metadata", f"date={date_str}",
-        filename
     ]
 
-    log(f"[ RUN ] Rekaman dimulai → {filename}")
+    # --duration: batasi durasi rekaman
+    if ARGS and ARGS.duration:
+        cmd.extend(["-t", str(ARGS.duration)])
+        log(f"[RUN] Durasi rekaman dibatasi: {ARGS.duration} detik")
+
+    cmd.append(filename)
+
+    log(f"[RUN] Rekaman dimulai → {filename}")
     process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, bufsize=1)
 
     def log_ffmpeg(proc):
@@ -302,12 +686,14 @@ def run_ffmpeg(url, suffix="", position=0, no_upload=False):
 
     threading.Thread(target=log_ffmpeg, args=(process,), daemon=True).start()
 
+    no_timer = ARGS and ARGS.no_timer_limit
     cutoff_reached = False
+
     while True:
-        now = now_wita()
-        if now.hour == 18 and now.minute >= 30:
-            cutoff_reached = True
-            log(f"[ CUT-OFF ] Siaran berakhir pukul 18:30 WITA. Menghentikan perekaman...")
+        # /skip-stage: hentikan rekaman
+        if CONSOLE and CONSOLE.skip_stage.is_set():
+            CONSOLE.skip_stage.clear()
+            log("[SKIP] Rekaman dihentikan oleh user (/skip-stage).")
             try:
                 process.send_signal(signal.SIGINT)
                 process.wait(timeout=10)
@@ -315,51 +701,94 @@ def run_ffmpeg(url, suffix="", position=0, no_upload=False):
                 process.kill()
             break
 
+        now = now_wita()
+
+        # Cek cutoff waktu hanya jika --no-timer-limit TIDAK aktif
+        if not no_timer:
+            if now.hour == 18 and now.minute >= 30:
+                cutoff_reached = True
+                log("[CUT-OFF] Siaran berakhir pukul 18:30 WITA. Menghentikan perekaman...")
+                try:
+                    process.send_signal(signal.SIGINT)
+                    process.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                break
+
         if process.poll() is not None:
-                    now_check = now_wita()
-                    if now_check.hour >= 18:
-                        cutoff_reached = True
-                        log("[ FAIL ] Perekaman berhenti — siaran sudah selesai.")
-                    else:
-                        log("[ FAIL ] Perekaman berhenti tiba-tiba. Akan segera dimulai ulang...")
-                    break
+            if not no_timer:
+                now_check = now_wita()
+                if now_check.hour >= 18:
+                    cutoff_reached = True
+                    log("[FAIL] Perekaman berhenti — siaran sudah selesai.")
+                else:
+                    log("[FAIL] Perekaman berhenti tiba-tiba. Akan segera dimulai ulang...")
+            else:
+                log("[DONE] Perekaman selesai.")
+            break
+
         time.sleep(1)
 
-    log(f"[ DONE ] Proses ffmpeg berhenti: {filename}")
+    log(f"[DONE] Proses ffmpeg berhenti: {filename}")
 
-    # Merge Logic
+    # --no-save: hapus file yang baru direkam
+    if ARGS and ARGS.no_save:
+        log(f"[SKIP] --no-save aktif. Menghapus file rekaman: {filename}")
+        try:
+            os.remove(filename)
+        except Exception as e:
+            log(f"[WARN] Gagal menghapus file: {e}")
+        return
+
+    # Merge Logic (skip jika --no-merge-chunks aktif)
+    no_merge = ARGS and ARGS.no_merge_chunks
     filename_to_upload = filename
-    if cutoff_reached:
-        log("[ MERGE ] Melakukan merge semua chunk menjadi file base final...")
+
+    if cutoff_reached and not no_merge:
+        log("[MERGE] Melakukan merge semua chunk menjadi file base final...")
         merged = merge_chunks_to_base(base_no_ext, ext)
         if merged:
             filename_to_upload = merged
         else:
-            log("[ WARN ] Merge gagal, akan upload chunk terakhir sebagai fallback.")
+            log("[WARN] Merge gagal, akan upload chunk terakhir sebagai fallback.")
+    elif cutoff_reached and no_merge:
+        log("[SKIP] --no-merge-chunks aktif. Merge chunk dilewati.")
 
-    log(f"[ UPLOAD-PREP ] Siap upload: {filename_to_upload}")
+    log(f"[UPLOAD-PREP] Siap upload: {filename_to_upload}")
 
     if no_upload:
-        log(f"[ SKIP ] Mode tanpa upload aktif. File tersimpan di {filename_to_upload}")
+        log(f"[SKIP] Mode tanpa upload aktif. File tersimpan di {filename_to_upload}")
         return
 
     if position > 0:
         delay = position * 10
-        log(f"[ DELAY ] Menunggu {delay} detik sebelum upload...")
+        log(f"[DELAY] Menunggu {delay} detik sebelum upload...")
         time.sleep(delay)
 
     archive_url, item_id = upload_to_archive(filename_to_upload)
 
     if archive_url and item_id:
-        log(f"[ ARCHIVE ] File tersedia di {archive_url}")
+        log(f"[ARCHIVE] File tersedia di {archive_url}")
         write_env_variables(archive_url, item_id)
     else:
         write_env_variables("None", "None")
 
 
+# =============================================
+# UPLOAD
+# =============================================
 def upload_to_archive(file_path, retries=5):
-    """Upload file ke archive.org dan hasilkan URL langsung + item_id, retry jika gagal"""
-    log(f"[ UPLOAD ] Mulai upload {file_path} ke archive.org...")
+    """Upload file ke archive.org"""
+
+    access_key = MY_ACCESS_KEY
+    secret_key = MY_SECRET_KEY
+    if ARGS:
+        if ARGS.archive_access:
+            access_key = ARGS.archive_access
+        if ARGS.archive_secret:
+            secret_key = ARGS.archive_secret
+
+    log(f"[UPLOAD] Mulai upload {file_path} ke archive.org...")
     item_identifier = f"vot-denpasar-{now_wita().strftime('%Y%m%d-%H%M%S')}"
     filename = os.path.basename(file_path)
 
@@ -373,27 +802,27 @@ def upload_to_archive(file_path, retries=5):
                     'title': filename,
                     'creator': 'VOT Radio Denpasar'
                 },
-                access_key=MY_ACCESS_KEY,
-                secret_key=MY_SECRET_KEY,
+                access_key=access_key,
+                secret_key=secret_key,
                 verbose=True
             )
 
             details_url = f"https://archive.org/details/{item_identifier}"
             download_url = f"https://archive.org/download/{item_identifier}/{filename}"
 
-            log(f"[ DONE ] Upload berhasil: {details_url}")
-            log(f"[ LINK ] URL langsung: {download_url}")
-            log(f"[ ITEM ] ID: {item_identifier}")
+            log(f"[DONE] Upload berhasil: {details_url}")
+            log(f"[LINK] URL langsung: {download_url}")
+            log(f"[ITEM] ID: {item_identifier}")
 
             return download_url, item_identifier
 
         except Exception as e:
-            log(f"[ WARN ] Upload gagal percobaan {attempt}: {e}")
+            log(f"[WARN] Upload gagal percobaan {attempt}: {e}")
             if attempt < retries:
-                log("[ RETRY ] Menunggu 10 detik sebelum mencoba lagi...")
+                log("[RETRY] Menunggu 10 detik sebelum mencoba lagi...")
                 time.sleep(10)
             else:
-                log("[ ERROR ] Semua percobaan upload gagal.")
+                log("[ERROR] Semua percobaan upload gagal.")
                 return None, None
 
 
@@ -405,52 +834,129 @@ def write_env_variables(url, item_id):
                 env_file.write(f"ARCHIVE_URL={url}\n")
                 env_file.write(f"ITEM_ID={item_id}\n")
                 env_file.flush()
-                log(f"[ ENV ] ARCHIVE_URL dan ITEM_ID dikirim ke environment GitHub.")
+                log("[ENV] ARCHIVE_URL dan ITEM_ID dikirim ke environment GitHub.")
         else:
-            log("[ WARN ] GITHUB_ENV tidak tersedia (mungkin bukan di workflow).")
+            log("[WARN] GITHUB_ENV tidak tersedia (mungkin bukan di workflow).")
     except Exception as e:
-        log(f"[ ERROR ] Gagal menulis environment: {e}")
+        log(f"[ERROR] Gagal menulis environment: {e}")
 
 
+# =============================================
+# MAIN RECORDING
+# =============================================
 def main_recording():
-    parser = argparse.ArgumentParser(description="Record stream and upload")
+    global ARGS, MY_ACCESS_KEY, MY_SECRET_KEY
+
+    parser = argparse.ArgumentParser(
+        description="VOT Radio Denpasar — Stream Recorder & Uploader",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+
     parser.add_argument("-s", "--suffix", type=str, default="", help="Suffix di akhir nama file")
     parser.add_argument("-p", "--position", type=int, default=0, help="Posisi untuk delay upload (delay = position * 10 detik)")
     parser.add_argument("--skip-check", action="store_true", help="Lewati pengecekan stream, langsung mulai rekam")
     parser.add_argument("--no-upload", action="store_true", help="Rekam saja tanpa upload ke archive.org")
-    args = parser.parse_args()
+    parser.add_argument("--hide-banner", action="store_true", help="Sembunyikan banner help saat startup")
 
-    stream_url = "http://i.klikhost.com:8502/stream"
-    if args.skip_check:
-        log("[ SKIP ] Pengecekan stream dilewati, langsung mulai rekam...")
+    parser.add_argument("--no-timer-limit", action="store_true", help="Abaikan batasan waktu (jam 18:30 cutoff, dll)")
+    parser.add_argument("--no-record", action="store_true", help="Skip perekaman ffmpeg")
+    parser.add_argument("--no-merge-chunks", action="store_true", help="Skip penggabungan chunk (jika ada multiple record)")
+    parser.add_argument("--no-log", action="store_true", help="Nonaktifkan semua log output")
+    parser.add_argument("--no-save", action="store_true", help="Tidak menyimpan file rekaman (hapus setelah selesai)")
+
+    parser.add_argument("--archive-access", "--archive-acc", type=str, default=None, dest="archive_access",
+                        help="Archive.org access key (override env var)")
+    parser.add_argument("--archive-secret", "--archive-sec", type=str, default=None, dest="archive_secret",
+                        help="Archive.org secret key (override env var)")
+
+    parser.add_argument("--stream-url", type=str, default=None, help="URL stream kustom")
+    parser.add_argument("-o", type=str, default=None, dest="output_name",
+                        help="Nama output file (tanpa path/ext, gunakan bersama --stream-url)")
+    parser.add_argument("--stream-file-format", type=str, default=None,
+                        help="Format file stream (mp3, wav, aac, dll) — skip ffprobe")
+    parser.add_argument("--duration", type=int, default=None,
+                        help="Durasi rekaman dalam detik (misal: 10 = 10 detik)")
+
+    ARGS = parser.parse_args()
+
+    if ARGS.archive_access:
+        MY_ACCESS_KEY = ARGS.archive_access
+    if ARGS.archive_secret:
+        MY_SECRET_KEY = ARGS.archive_secret
+
+    stream_url = ARGS.stream_url if ARGS.stream_url else "http://i.klikhost.com:8502/stream"
+
+    if ARGS.skip_check:
+        log("[SKIP] Pengecekan stream dilewati, langsung mulai rekam...")
     else:
         wait_for_stream(stream_url)
-    run_ffmpeg(stream_url, args.suffix, args.position, no_upload=args.no_upload)
-    log("[ DONE ] Semua tugas selesai.")
+
+    run_ffmpeg(stream_url, ARGS.suffix, ARGS.position, no_upload=ARGS.no_upload)
+    log("[DONE] Semua tugas selesai.")
     return True
 
 
+# =============================================
+# ENTRY POINT
+# =============================================
 if __name__ == "__main__":
-    log("[ START ] Memulai program recording dengan restart otomatis...")
+    # Pre-parse untuk flag yang dibutuhkan sebelum main loop
+    pre_parser = argparse.ArgumentParser(add_help=False)
+    pre_parser.add_argument("--no-timer-limit", action="store_true", default=False)
+    pre_parser.add_argument("--no-log", action="store_true", default=False)
+    pre_parser.add_argument("--hide-banner", action="store_true", default=False)
+    pre_args, _ = pre_parser.parse_known_args()
+
+    if not pre_args.hide_banner:
+        print_help_banner()
+
+    # Set ARGS sementara agar log() bisa cek --no-log sebelum main_recording()
+    class _TempArgs:
+        no_log = pre_args.no_log
+        no_timer_limit = pre_args.no_timer_limit
+        no_record = False
+        stream_file_format = None
+        output_name = None
+        duration = None
+        no_save = False
+        no_merge_chunks = False
+        archive_access = None
+        archive_secret = None
+    ARGS = _TempArgs()
+
+    # Mulai interactive console jika stdin adalah TTY
+    if sys.stdin.isatty():
+        CONSOLE = InteractiveConsole()
+        CONSOLE.start()
+
+    log("[START] Memulai program recording dengan restart otomatis...")
 
     while True:
         now = now_wita()
 
-        if now.hour >= 18:  # ← ubah dari > 18 ke >= 18
-            log(f"[ STOP ] Sudah jam {now.strftime('%H:%M')} WITA, hentikan program.")
-            break
+        if not pre_args.no_timer_limit:
+            if now.hour >= 18:
+                log(f"[STOP] Sudah jam {now.strftime('%H:%M')} WITA, hentikan program.")
+                break
 
         try:
             main_recording()
         except Exception as e:
-            log(f"[ ERROR ] Terjadi error: {e}")
+            log(f"[ERROR] Terjadi error: {e}")
 
         now = now_wita()
-        if now.hour >= 18:  # ← ubah dari > 18 ke >= 18
-            log(f"[ STOP ] Setelah recording selesai, sudah jam {now.strftime('%H:%M')} WITA, hentikan program.")
-            break
+        if not pre_args.no_timer_limit:
+            if now.hour >= 18:
+                log(f"[STOP] Setelah recording selesai, sudah jam {now.strftime('%H:%M')} WITA, hentikan program.")
+                break
+            else:
+                log("[RESTART] Restarting recording loop...")
+                continue
         else:
-            log("[ RESTART ] Restarting recording loop...")
+            if ARGS and hasattr(ARGS, 'duration') and ARGS.duration:
+                log("[DONE] Rekaman dengan durasi terbatas selesai.")
+                break
+            log("[RESTART] Restarting recording loop (no timer limit)...")
             continue
 
-    log("[ END ] Program selesai.")
+    log("[END] Program selesai.")

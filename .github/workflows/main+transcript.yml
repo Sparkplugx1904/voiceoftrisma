@@ -18,20 +18,20 @@ jobs:
       id_s0p0:  ${{ steps.map.outputs.id_s0p0 }}
 
     steps:
-      - name: Setup Cloudflare WARP
-        uses: fscarmen/warp-on-actions@v1.4
-        with:
-          stack: ipv4
+      # - name: Setup Cloudflare WARP
+      #   uses: fscarmen/warp-on-actions@v1.4
+      #   with:
+      #     stack: ipv4
 
-      - name: Verify WARP
-        run: |
-          STATUS=$(curl -s https://www.cloudflare.com/cdn-cgi/trace | grep "warp")
-          echo "[ INFO ] $STATUS"
-          if echo "$STATUS" | grep -q "warp=on"; then
-            echo "✅ WARP aktif!"
-          else
-            echo "⚠️ WARP mungkin belum aktif, lanjut tetap..."
-          fi
+      # - name: Verify WARP
+      #   run: |
+      #     STATUS=$(curl -s https://www.cloudflare.com/cdn-cgi/trace | grep "warp")
+      #     echo "[ INFO ] $STATUS"
+      #     if echo "$STATUS" | grep -q "warp=on"; then
+      #       echo "✅ WARP aktif!"
+      #     else
+      #       echo "⚠️ WARP mungkin belum aktif, lanjut tetap..."
+      #     fi
 
       - name: Download Python recorder & FFmpeg
         run: |
