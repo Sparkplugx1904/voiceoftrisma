@@ -351,7 +351,7 @@ def print_help_banner():
 
     banner = f"""
 {INFO_COLOR}╔══════════════════════════════════════════════════════════════════╗
-║                  {BOLD}VOT Radio Denpasar Recorder{RESET}{INFO_COLOR}                   ║
+║                  {BOLD}VOT Radio Denpasar Recorder{RESET}{INFO_COLOR}                    ║
 ╠══════════════════════════════════════════════════════════════════╣{RESET}
 {TEXT_COLOR}  Rekam stream audio dan upload otomatis ke archive.org{RESET}
 {INFO_COLOR}╚══════════════════════════════════════════════════════════════════╝{RESET}
@@ -359,7 +359,7 @@ def print_help_banner():
 {BOLD}{INFO_COLOR}📋 Opsi Tersedia:{RESET}
 {TIME_COLOR}─────────────────────────────────────────────────────────────────{RESET}
 
-  {WARN_COLOR}-s, --suffix{RESET} {TEXT_COLOR}<TEXT>{RESET}          Suffix di akhir nama file
+  {WARN_COLOR}-s, --suffix{RESET} {TEXT_COLOR}<TEXT>{RESET}         Suffix di akhir nama file
   {WARN_COLOR}-p, --position{RESET} {TEXT_COLOR}<INT>{RESET}        Posisi untuk delay upload (delay = N * 10s)
   {WARN_COLOR}-o{RESET} {TEXT_COLOR}<FILENAME>{RESET}               Nama output file (tanpa path, tanpa ext)
   {WARN_COLOR}--duration{RESET} {TEXT_COLOR}<SECONDS>{RESET}        Durasi rekaman dalam detik (misal: 10 = 10 detik)
