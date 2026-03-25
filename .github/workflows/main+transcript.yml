@@ -20,6 +20,7 @@ jobs:
     steps:
       - name: Install ProtonVPN CLI
         run: |
+          sudo apt update
           sudo apt install proton-vpn-cli
 
       - name: Connect ProtonVPN
