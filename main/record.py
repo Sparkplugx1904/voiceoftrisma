@@ -425,36 +425,45 @@ def now_wita():
 # =============================================
 def wait_for_stream(url):
     """
-    Strategi polling bertahap berbasis offset sejak jam :00.
-    Tahap 1:  0– 2 menit → setiap  3 detik
-    Tahap 2:  2– 3 menit → setiap  5 detik
-    Tahap 3:  3– 5 menit → setiap 15 detik
-    Tahap 4:  5–10 menit → setiap 30 detik
-    Tahap 5: 10–60 menit → setiap 60 detik
+    Strategi polling bertahap berbasis counter internal.
+    Tahap 1:  0– 2 menit → setiap   3 detik
+    Tahap 2:  2– 3 menit → setiap   5 detik
+    Tahap 3:  3– 5 menit → setiap  15 detik
+    Tahap 4:  5–10 menit → setiap  30 detik
+    Tahap 5: 10–30 menit → setiap  60 detik
+    Tahap 6: 30–50 menit → setiap  90 detik
+    Tahap 7: 50–60 menit → setiap 120 detik
+
+    Counter di-reset otomatis saat jam :00 jika interval saat ini
+    lebih lambat dari jadwal awal (kembali ke polling cepat).
     """
     stats_url = "https://i.klikhost.com:8502/stats?json=1"
 
     STAGES = [
-        (  0,  120,  3),
-        (120,  180,  5),
-        (180,  300, 15),
-        (300,  600, 30),
-        (600, 3600, 60),
+        (   0,  120,   3),
+        ( 120,  180,   5),
+        ( 180,  300,  15),
+        ( 300,  600,  30),
+        ( 600, 1800,  60),
+        (1800, 3000,  90),
+        (3000, 3600, 120),
     ]
 
     def get_interval(elapsed_seconds):
         for start, end, interval in STAGES:
             if start <= elapsed_seconds < end:
                 return interval
-        return 60
+        return 120
 
-    def seconds_since_last_hour():
-        now = now_wita()
-        return now.minute * 60 + now.second
-
-    stage_labels = {3: "0–2 mnt", 5: "2–3 mnt", 15: "3–5 mnt", 30: "5–10 mnt", 60: "10–60 mnt"}
+    stage_labels = {
+        3: "0–2 mnt", 5: "2–3 mnt", 15: "3–5 mnt",
+        30: "5–10 mnt", 60: "10–30 mnt", 90: "30–50 mnt", 120: "50–60 mnt",
+    }
     last_interval = None
     last_err = None  # dedup hanya untuk error/warn, bukan OFFLINE
+
+    poll_start = time.monotonic()
+    last_seen_hour = now_wita().hour
 
     log("[WAIT] Menunggu siaran — mode polling bertahap aktif...")
 
@@ -465,9 +474,23 @@ def wait_for_stream(url):
             log("[SKIP] Wait stage dilewati oleh user.")
             return
 
-        elapsed = seconds_since_last_hour()
+        current_hour = now_wita().hour
+        elapsed = time.monotonic() - poll_start
+
+        # Deteksi pergantian jam (:00) — reset counter jika interval lebih lambat
+        if current_hour != last_seen_hour:
+            scheduled = get_interval(0)       # interval awal fase (3s)
+            current  = get_interval(elapsed)  # interval saat ini
+            if current > scheduled:
+                log(f"[WAIT] Reset polling — jam :{current_hour:02d}:00 "
+                    f"(interval {current}s → {scheduled}s)")
+                poll_start = time.monotonic()
+                elapsed = 0
+                last_interval = None  # paksa re-log tahap
+            last_seen_hour = current_hour
+
         interval = get_interval(elapsed)
-        mm, ss = divmod(elapsed, 60)
+        mm, ss = divmod(int(elapsed), 60)
 
         # Hanya tampilkan saat transisi tahap, dengan elapsed time
         if interval != last_interval:
