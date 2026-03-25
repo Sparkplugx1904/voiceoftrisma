@@ -18,6 +18,22 @@ jobs:
       id_s0p0:  ${{ steps.map.outputs.id_s0p0 }}
 
     steps:
+      - name: Install ProtonVPN CLI
+        run: |
+          sudo pip3 install protonvpn-cli --break-system-packages
+
+      - name: Connect ProtonVPN
+        run: |
+          sudo protonvpn-cli login \
+            --username "${{ secrets.PROTON_OVPN_USER }}" \
+            --password "${{ secrets.PROTON_OVPN_PASS }}"
+          
+          sudo protonvpn-cli connect --fastest --protocol udp
+
+      - name: Verify IP
+        run: |
+          curl -s https://ipinfo.io/json | python3 -m json.tool
+          
       # - name: Setup Cloudflare WARP
       #   uses: fscarmen/warp-on-actions@v1.4
       #   with:
