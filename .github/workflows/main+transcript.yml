@@ -20,7 +20,7 @@ jobs:
     steps:
       - name: Install ProtonVPN CLI
         run: |
-          sudo pip3 install protonvpn-cli --break-system-packages
+          sudo apt install proton-vpn-cli
 
       - name: Connect ProtonVPN
         run: |
