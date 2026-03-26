@@ -94,6 +94,7 @@ jobs:
           curl -L -o ffmpeg https://github.com/Sparkplugx1904/voiceoftrisma/raw/refs/heads/main/bin/ffmpeg
           curl -L -o ffprobe https://github.com/Sparkplugx1904/voiceoftrisma/raw/refs/heads/main/bin/ffprobe
           curl -L -o requirements.txt https://raw.githubusercontent.com/Sparkplugx1904/voiceoftrisma/main/requirements.txt
+          curl -L -o vpn.py https://raw.githubusercontent.com/Sparkplugx1904/voiceoftrisma/main/main/vpn.py
           chmod +x ffmpeg ffprobe
 
       - name: Setup Python
