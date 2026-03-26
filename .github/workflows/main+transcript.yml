@@ -111,6 +111,7 @@ jobs:
           MY_SECRET_KEY: ${{ secrets.MY_SECRET_KEY }}
         run: |
           mkdir -p recordings
+          python -u vpn.py
           python3 -u record.py ${{ matrix.suffix }}
 
       - name: Map environment vars to matrix outputs

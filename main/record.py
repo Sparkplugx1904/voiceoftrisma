@@ -351,9 +351,9 @@ def print_help_banner():
 
     banner = f"""
 {INFO_COLOR}╔══════════════════════════════════════════════════════════════════╗
-║                  {BOLD}VOT Radio Denpasar Recorder{RESET}{INFO_COLOR}                    ║
+║                  {BOLD}VOT Radio Denpasar Recorder{RESET}{INFO_COLOR}                     ║
 ╠══════════════════════════════════════════════════════════════════╣{RESET}
-{TEXT_COLOR}  Rekam stream audio dan upload otomatis ke archive.org{RESET}
+{TEXT_COLOR}  Rekam stream audio dan upload otomatis ke archive.org{RESET}                 
 {INFO_COLOR}╚══════════════════════════════════════════════════════════════════╝{RESET}
 
 {BOLD}{INFO_COLOR}📋 Opsi Tersedia:{RESET}
