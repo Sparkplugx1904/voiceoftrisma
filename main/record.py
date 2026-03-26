@@ -74,13 +74,17 @@ TAG_COLORS = {
     "[UPLOAD-PREP]" : INFO_COLOR,
     "[CMD]"         : INFO_COLOR,
 
-    # Purple — upload / transfer data
+    # Purple — upload / transfer data / VPN
     "[UPLOAD]"      : UP_COLOR,
     "[MERGE]"       : UP_COLOR,
+    "[VPN]"         : UP_COLOR,
+    "[IP]"          : UP_COLOR,
+    "[WARP]"        : UP_COLOR,
 
     # Gray — output eksternal / restart
     "[FFMPEG]"      : TIME_COLOR,
     "[RESTART]"     : TIME_COLOR,
+    "[PING]"        : TIME_COLOR,
 }
 
 
@@ -339,6 +343,176 @@ def log(msg):
         CONSOLE.buffer_log(line)
     else:
         print(line, flush=True)
+
+
+# =============================================
+# VPN / CLOUDFLARE WARP AUTO-CONNECT
+# =============================================
+VPN_STATS_URL = "https://i.klikhost.com:8502/stats?json=1"
+VPN_IP_CHECK_URL = "https://ipinfo.io/ip"
+VPN_CLOUDFLARE_PREFIX = "104."
+VPN_MAX_PING_RETRIES = 5
+VPN_PING_INTERVAL = 10
+VPN_MAX_WARP_RETRIES = 10
+VPN_WARP_RECONNECT_WAIT = 5
+
+# Deteksi path warp-cli
+_warp_cli = shutil.which("warp-cli")
+if not _warp_cli:
+    _default = r"C:\Program Files\Cloudflare\Cloudflare WARP\warp-cli.exe"
+    if os.path.isfile(_default):
+        _warp_cli = _default
+if not _warp_cli:
+    _warp_cli = "warp-cli"
+VPN_WARP_CLI = _warp_cli
+
+
+def _run_warp(args, timeout=15):
+    """Jalankan warp-cli dengan argumen tertentu."""
+    cmd = [VPN_WARP_CLI] + args
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        return result.returncode == 0, result.stdout.strip()
+    except FileNotFoundError:
+        log(f"[ERROR] warp-cli tidak ditemukan di: {VPN_WARP_CLI}")
+        log(f"[ERROR] Install Cloudflare WARP: https://1.1.1.1/")
+        return False, ""
+    except subprocess.TimeoutExpired:
+        log(f"[WARN] warp-cli timeout ({timeout}s)")
+        return False, ""
+    except Exception as e:
+        log(f"[ERROR] Gagal menjalankan warp-cli: {e}")
+        return False, ""
+
+
+def _vpn_get_ip():
+    """Dapatkan IP publik saat ini."""
+    try:
+        resp = requests.get(VPN_IP_CHECK_URL, timeout=10)
+        if resp.status_code == 200:
+            return resp.text.strip()
+    except Exception:
+        pass
+    return None
+
+
+def _vpn_is_cloudflare(ip):
+    """Cek apakah IP milik Cloudflare (awalan 104.)."""
+    return bool(ip and ip.startswith(VPN_CLOUDFLARE_PREFIX))
+
+
+def _vpn_ping_stats():
+    """Ping stats_url, return True jika HTTP 200."""
+    try:
+        resp = requests.get(VPN_STATS_URL, timeout=5, verify=False)
+        return resp.status_code == 200
+    except Exception:
+        return False
+
+
+def _warp_disconnect():
+    log("[WARP] Memutuskan koneksi WARP...")
+    ok, out = _run_warp(["disconnect"])
+    if ok:
+        log("[WARP] Koneksi WARP diputus.")
+    else:
+        log(f"[WARN] Gagal memutus WARP: {out}")
+    time.sleep(2)
+    return ok
+
+
+def _warp_connect():
+    log("[WARP] Menghubungkan ke WARP...")
+    ok, out = _run_warp(["connect"])
+    if ok:
+        log("[WARP] Perintah connect berhasil dikirim.")
+    else:
+        log(f"[WARN] Gagal menghubungkan WARP: {out}")
+    time.sleep(VPN_WARP_RECONNECT_WAIT)
+    return ok
+
+
+def _warp_restart_for_new_ip(old_ip):
+    """Restart WARP berulang sampai dapat IP baru."""
+    for attempt in range(1, VPN_MAX_WARP_RETRIES + 1):
+        log(f"[WARP] Restart koneksi (percobaan {attempt}/{VPN_MAX_WARP_RETRIES})...")
+        _warp_disconnect()
+        _warp_connect()
+        new_ip = _vpn_get_ip()
+        if not new_ip:
+            log("[WARN] Gagal mendapatkan IP setelah reconnect, coba lagi...")
+            continue
+        log(f"[IP] IP setelah reconnect: {new_ip}")
+        if new_ip != old_ip:
+            log(f"[OK] IP baru diperoleh! {old_ip} → {new_ip}")
+            return True, new_ip
+        else:
+            log(f"[WARN] IP masih sama ({new_ip}), restart lagi...")
+    log(f"[FAIL] Gagal mendapatkan IP baru setelah {VPN_MAX_WARP_RETRIES} percobaan.")
+    return False, old_ip
+
+
+def vpn_check():
+    """
+    Cek koneksi ke stats server. Jika gagal 5x → connect/reconnect WARP.
+    Dipanggil sebelum wait_for_stream().
+    """
+    log("[VPN] Memulai pengecekan koneksi (VPN auto-connect)...")
+    log(f"[INFO] WARP CLI: {VPN_WARP_CLI}")
+
+    # ── FASE 1: Ping stats_url ──
+    fail_count = 0
+    for attempt in range(1, VPN_MAX_PING_RETRIES + 1):
+        log(f"[PING] Percobaan {attempt}/{VPN_MAX_PING_RETRIES}...")
+        if _vpn_ping_stats():
+            log("[OK] Stats server merespons (HTTP 200). VPN tidak diperlukan.")
+            return
+        fail_count += 1
+        log(f"[FAIL] Gagal ping ({fail_count}/{VPN_MAX_PING_RETRIES})")
+        if fail_count < VPN_MAX_PING_RETRIES:
+            log(f"[WAIT] Menunggu {VPN_PING_INTERVAL}s sebelum percobaan berikutnya...")
+            time.sleep(VPN_PING_INTERVAL)
+
+    # ── FASE 2: Semua ping gagal — kelola WARP ──
+    log(f"[ERROR] Stats server tidak merespons setelah {VPN_MAX_PING_RETRIES} percobaan.")
+    log("[VPN] Memeriksa koneksi saat ini...")
+
+    current_ip = _vpn_get_ip()
+    if current_ip:
+        log(f"[IP] IP publik saat ini: {current_ip}")
+    else:
+        log("[WARN] Tidak dapat mendeteksi IP publik.")
+
+    if current_ip and _vpn_is_cloudflare(current_ip):
+        # Sudah pakai IP Cloudflare → restart untuk dapat IP baru
+        log(f"[VPN] Sudah terkoneksi Cloudflare ({current_ip}). Restart untuk IP baru...")
+        success, new_ip = _warp_restart_for_new_ip(current_ip)
+        if success:
+            log(f"[OK] IP baru: {new_ip}")
+        else:
+            log("[WARN] Gagal mendapatkan IP baru, lanjut dengan IP saat ini.")
+    else:
+        # Belum pakai Cloudflare → connect
+        log("[VPN] Belum terkoneksi Cloudflare WARP. Menghubungkan...")
+        if _warp_connect():
+            time.sleep(3)
+            new_ip = _vpn_get_ip()
+            if new_ip:
+                log(f"[IP] IP setelah connect: {new_ip}")
+                if _vpn_is_cloudflare(new_ip):
+                    log("[OK] Berhasil terkoneksi ke Cloudflare WARP!")
+                else:
+                    log(f"[WARN] IP bukan Cloudflare ({new_ip}). WARP mungkin belum aktif.")
+            else:
+                log("[WARN] Tidak dapat mendeteksi IP setelah connect.")
+        else:
+            log("[FAIL] Gagal menghubungkan WARP. Lanjut tanpa VPN...")
+
+    # Verifikasi akhir
+    if _vpn_ping_stats():
+        log("[OK] Stats server dapat dijangkau setelah setup VPN.")
+    else:
+        log("[WARN] Stats server masih tidak merespons setelah setup VPN.")
 
 
 # =============================================
@@ -905,6 +1079,9 @@ def main_recording():
         MY_SECRET_KEY = ARGS.archive_secret
 
     stream_url = ARGS.stream_url if ARGS.stream_url else "http://i.klikhost.com:8502/stream"
+
+    # VPN auto-connect sebelum mulai
+    vpn_check()
 
     if ARGS.skip_check:
         log("[SKIP] Pengecekan stream dilewati, langsung mulai rekam...")
