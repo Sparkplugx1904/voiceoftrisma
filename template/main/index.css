@@ -448,7 +448,7 @@ body.sidebar-toggled .navbar-main > .logo-main.hidden-desktop {
     display: inline-flex;
     align-items: center;
     gap: 10px;
-    background: rgba(225, 29, 72, 0.15);
+    background: rgba(225, 29, 72, 0.15); /* Default is online style */
     color: var(--accent);
     padding: 8px 16px;
     border-radius: 30px;
@@ -457,6 +457,20 @@ body.sidebar-toggled .navbar-main > .logo-main.hidden-desktop {
     letter-spacing: 1px;
     margin-bottom: 25px;
     border: 1px solid rgba(225, 29, 72, 0.3);
+}
+
+.live-badge.online {
+    background: var(--accent);
+    color: white;
+    border: 1px solid var(--accent);
+    box-shadow: 0 0 15px var(--accent-glow);
+}
+
+.live-badge.offline {
+    background: rgba(128, 128, 128, 0.15);
+    color: var(--text-muted);
+    border: 1px solid rgba(128, 128, 128, 0.3);
+    box-shadow: none;
 }
 
 .pulse {
@@ -468,10 +482,22 @@ body.sidebar-toggled .navbar-main > .logo-main.hidden-desktop {
     animation: animate-pulse 2s infinite;
 }
 
+/* Make pulse white when background is red */
+.live-badge.online .pulse {
+    background: #ffffff;
+    animation: animate-pulse-white 2s infinite;
+}
+
 @keyframes animate-pulse {
     0% { transform: scale(1); box-shadow: 0 0 0 0 rgba(225, 29, 72, 0.7); }
     70% { transform: scale(1); box-shadow: 0 0 0 10px rgba(225, 29, 72, 0); }
     100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(225, 29, 72, 0); }
+}
+
+@keyframes animate-pulse-white {
+    0% { transform: scale(1); box-shadow: 0 0 0 0 rgba(255, 255, 255, 0.7); }
+    70% { transform: scale(1); box-shadow: 0 0 0 10px rgba(255, 255, 255, 0); }
+    100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(255, 255, 255, 0); }
 }
 
 .hero-section h1 {
