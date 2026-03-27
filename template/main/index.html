@@ -7,8 +7,13 @@
     <title>Voice of Trisma</title>
     <link rel="icon" href="./kbrf.svg" type="image/png">
 
-    <!-- External Dependencies from Player Configuration -->
+    <!-- External Dependencies -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    
+    <!-- Google Fonts: Outfit -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
 
     <!-- Main Application Stylesheet -->
     <link rel="stylesheet" href="index.css">
@@ -28,8 +33,18 @@
             </div>
             <img src="madyapadma-voice-of-trisma.svg" alt="Logo Madyapadma" class="logo-sidebar">
         </div>
-        <a href="#/">Stream</a>
-        <a href="#/">Archive</a>
+        <nav>
+            <a href="#/" class="active"><i class="fa-solid fa-broadcast-tower"></i> Stream</a>
+            <a href="#/"><i class="fa-solid fa-box-archive"></i> Archive</a>
+            <a href="#/"><i class="fa-solid fa-circle-info"></i> About</a>
+            
+            <a href="#" id="themeToggleBtn" style="margin-top: auto;"><i class="fa-solid fa-moon"></i> Ganti Tema</a>
+        </nav>
+        
+        <div class="sidebar-footer">
+            <p>&copy; 2026 Madyapadma</p>
+            <p>Voice of Trisma v2.0</p>
+        </div>
     </div>
 
     <!-- Main Content Layout -->
@@ -40,54 +55,104 @@
                 <span></span>
                 <span></span>
             </div>
-            <img src="madyapadma-voice-of-trisma.svg" alt="Logo Madyapadma" class="logo-main">
+            <img src="madyapadma-voice-of-trisma.svg" alt="Logo Madyapadma" class="logo-main hidden-desktop">
             <div class="search-container">
                 <div class="search-box">
+                    <i class="fa fa-search search-icon"></i>
                     <input type="text" id="q" placeholder="Cari tanggal atau ID... (mis. 29-08-25)">
                     <button type="button" class="search-btn">
-                        <i class="fa fa-search"></i>
+                        <i class="fa-solid fa-arrow-right"></i>
                     </button>
                 </div>
             </div>
         </div>
-        <h1>Konten Utama</h1>
-        <p>Tampilan ini sekarang sudah responsif dan terintegrasi penuh menjadi satu kesatuan dokumen (Single Page
-            Layout).</p>
+        
+        <!-- Animated Hero Section -->
+        <div class="hero-section glass-panel">
+            <div class="live-badge">
+                <span class="pulse"></span> LIVE NOW
+            </div>
+            <h1>Radio Siaran Madyapadma</h1>
+            <p>Rasakan pengalaman antarmuka pengguna yang modern, mulus, dan responsif. Menggabungkan estetika mode gelap dengan elegan glassmorphism.</p>
+            
+            <div class="stats-row">
+                <div class="stat-item">
+                    <i class="fa-solid fa-headphones"></i>
+                    <span>2.4k Mendengarkan</span>
+                </div>
+                <div class="stat-item">
+                    <i class="fa-solid fa-music"></i>
+                    <span>Kualitas HD 320kbps</span>
+                </div>
+            </div>
+        </div>
+        
+        <div class="grid-content">
+            <div class="card glass-panel">
+                <img src="https://images.unsplash.com/photo-1614113489855-66422ad300a4?q=80&w=400&auto=format&fit=crop" class="card-img" alt="Cover">
+                <div class="card-body">
+                    <h3>Podcast Spesial HUT</h3>
+                    <p>Episode 45 • Bersama Alumni</p>
+                </div>
+                <button class="card-play-btn"><i class="fa-solid fa-play"></i></button>
+            </div>
+            <div class="card glass-panel">
+                <img src="https://images.unsplash.com/photo-1593697821252-0c9137d9fc45?q=80&w=400&auto=format&fit=crop" class="card-img" alt="Cover">
+                <div class="card-body">
+                    <h3>Top Hits 2026</h3>
+                    <p>Playlist • 50 Lagu</p>
+                </div>
+                <button class="card-play-btn"><i class="fa-solid fa-play"></i></button>
+            </div>
+            <div class="card glass-panel">
+                <img src="https://images.unsplash.com/photo-1505740420928-5e560c06d30e?q=80&w=400&auto=format&fit=crop" class="card-img" alt="Cover">
+                <div class="card-body">
+                    <h3>Acoustic Vibes</h3>
+                    <p>Live Session • Siang Hari</p>
+                </div>
+                <button class="card-play-btn"><i class="fa-solid fa-play"></i></button>
+            </div>
+        </div>
     </div>
 
-    <!-- Audio Player Bar (Imported Direct to HTML) -->
+    <!-- Audio Player Bar (Glassmorphism + Neon) -->
     <div class="audio-player-bar">
-        <div class="player-controls">
-            <button class="icon-btn" title="Mundur 10 Detik">
-                <i class="fa-solid fa-rotate-left"></i>
-            </button>
-            <button class="play-pause-btn" id="playPauseBtn" title="Play/Pause">
-                <svg width="40" height="40" viewBox="0 0 40 40">
-                    <circle cx="20" cy="20" r="19" fill="#C7092E" class="icon-bg" />
-                    <path class="morph-path" fill="#ffffff"
-                        d="M 14 12 L 21 16 L 21 24 L 14 28 Z M 21 16 L 28 20 L 28 20 L 21 24 Z" />
-                </svg>
-            </button>
-            <button class="icon-btn" title="Maju 10 Detik">
-                <i class="fa-solid fa-rotate-right"></i>
-            </button>
-        </div>
+        <!-- Progress bar on top edge -->
+        <input type="range" class="progress-bar-top" min="0" max="100" value="45">
 
-        <div class="player-center">
-            <div class="song-title">Judul Siaran Madyapadma Voice of Trisma</div>
-            <div class="progress-container">
-                <span class="time-text">0:00</span>
-                <input type="range" class="progress-bar" min="0" max="100" value="0">
-                <span class="time-text">45:30</span>
+        <div class="player-center player-info">
+            <div class="img-thumb-container">
+                <div class="img-thumb glass-panel pulse-soft">
+                    <i class="fa-solid fa-music"></i>
+                </div>
+            </div>
+            <div class="song-title-wrapper">
+                <div class="song-title">Siaran Langsung KBRF</div>
+                <div class="song-artist">Madyapadma Voice of Trisma</div>
             </div>
         </div>
 
+        <div class="player-controls">
+            <button class="icon-btn" title="Mundur 10 Detik">
+                <i class="fa-solid fa-backward-step"></i>
+            </button>
+            <button class="play-pause-btn" id="playPauseBtn" title="Play/Pause">
+                <svg width="24" height="24" viewBox="0 0 24 24">
+                    <path class="morph-path" fill="#ffffff" d="M 8 5 L 19 12 L 8 19 Z" />
+                </svg>
+            </button>
+            <button class="icon-btn" title="Maju 10 Detik">
+                <i class="fa-solid fa-forward-step"></i>
+            </button>
+        </div>
+
         <div class="player-tools">
+            <span class="time-text">45:30 / 1:30:00</span>
             <div class="volume-container">
                 <button class="icon-btn" id="volumeBtn" title="Volume">
                     <i class="fa-solid fa-volume-high"></i>
                 </button>
-                <div class="volume-slider-wrapper" id="volumeSliderWrapper">
+                <div class="volume-slider-wrapper glass-panel" id="volumeSliderWrapper">
                     <input type="range" class="volume-slider" min="0" max="100" value="100">
                 </div>
             </div>
@@ -112,11 +177,13 @@
         playPauseBtn.addEventListener('click', function () {
             isPlaying = !isPlaying;
             if (isPlaying) {
-                // Berubah menjadi garis-garis (pause)
-                morphPath.classList.add('paused');
+                // Berubah menjadi pause (dua garis vertikal)
+                morphPath.setAttribute('d', 'M 6 5 L 10 5 L 10 19 L 6 19 Z M 14 5 L 18 5 L 18 19 L 14 19 Z');
+                playPauseBtn.classList.add('playing');
             } else {
                 // Kembali membentu segitiga (play)
-                morphPath.classList.remove('paused');
+                morphPath.setAttribute('d', 'M 8 5 L 19 12 L 8 19 Z');
+                playPauseBtn.classList.remove('playing');
             }
         });
 
@@ -132,7 +199,7 @@
 
         // Menutup popup volume jika klik di sembarang tempat di luar popup
         document.addEventListener('click', function (event) {
-            if (!volumeSliderWrapper.contains(event.target)) {
+            if (!volumeSliderWrapper.contains(event.target) && !volumeBtn.contains(event.target)) {
                 volumeSliderWrapper.classList.remove('show');
             }
         });
@@ -141,6 +208,37 @@
         volumeSliderWrapper.addEventListener('click', function (event) {
             event.stopPropagation();
         });
+        
+        // Theme Toggle Logic
+        const themeToggleBtn = document.getElementById('themeToggleBtn');
+        const themeIcon = themeToggleBtn.querySelector('i');
+        
+        // Initial Check from LocalStorage
+        if (localStorage.getItem('theme') === 'light') {
+            document.body.classList.add('light-theme');
+            themeIcon.classList.replace('fa-moon', 'fa-sun');
+        }
+
+        themeToggleBtn.addEventListener('click', function(e) {
+            e.preventDefault();
+            document.body.classList.toggle('light-theme');
+            
+            if (document.body.classList.contains('light-theme')) {
+                localStorage.setItem('theme', 'light');
+                themeIcon.classList.replace('fa-moon', 'fa-sun');
+            } else {
+                localStorage.setItem('theme', 'dark');
+                themeIcon.classList.replace('fa-sun', 'fa-moon');
+            }
+        });
+        
+        // Progress bar dynamic styling update mechanism
+        const progressTop = document.querySelector('.progress-bar-top');
+        progressTop.addEventListener('input', function() {
+            const val = this.value;
+            this.style.setProperty('--val', val + '%');
+        });
+        progressTop.style.setProperty('--val', progressTop.value + '%');
     </script>
 </body>
 
