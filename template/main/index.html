@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="id">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Voice of Trisma</title>
+    <link rel="icon" href="./kbrf.svg" type="image/png">
+
+    <!-- External Dependencies from Player Configuration -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+
+    <!-- Main Application Stylesheet -->
+    <link rel="stylesheet" href="index.css">
+</head>
+
+<body>
+
+    <div class="sidebar-overlay" id="overlay" onclick="toggleSidebar()"></div>
+
+    <!-- Sidebar Layout -->
+    <div class="sidebar" id="sidebar">
+        <div class="sidebar-header">
+            <div class="hamburger" onclick="toggleSidebar()">
+                <span></span>
+                <span></span>
+                <span></span>
+            </div>
+            <img src="madyapadma-voice-of-trisma.svg" alt="Logo Madyapadma" class="logo-sidebar">
+        </div>
+        <a href="#/">Stream</a>
+        <a href="#/">Archive</a>
+    </div>
+
+    <!-- Main Content Layout -->
+    <div class="main-content">
+        <div class="navbar-main">
+            <div class="hamburger" onclick="toggleSidebar()">
+                <span></span>
+                <span></span>
+                <span></span>
+            </div>
+            <img src="madyapadma-voice-of-trisma.svg" alt="Logo Madyapadma" class="logo-main">
+            <div class="search-container">
+                <div class="search-box">
+                    <input type="text" id="q" placeholder="Cari tanggal atau ID... (mis. 29-08-25)">
+                    <button type="button" class="search-btn">
+                        <i class="fa fa-search"></i>
+                    </button>
+                </div>
+            </div>
+        </div>
+        <h1>Konten Utama</h1>
+        <p>Tampilan ini sekarang sudah responsif dan terintegrasi penuh menjadi satu kesatuan dokumen (Single Page
+            Layout).</p>
+    </div>
+
+    <!-- Audio Player Bar (Imported Direct to HTML) -->
+    <div class="audio-player-bar">
+        <div class="player-controls">
+            <button class="icon-btn" title="Mundur 10 Detik">
+                <i class="fa-solid fa-rotate-left"></i>
+            </button>
+            <button class="play-pause-btn" id="playPauseBtn" title="Play/Pause">
+                <svg width="40" height="40" viewBox="0 0 40 40">
+                    <circle cx="20" cy="20" r="19" fill="#C7092E" class="icon-bg" />
+                    <path class="morph-path" fill="#ffffff"
+                        d="M 14 12 L 21 16 L 21 24 L 14 28 Z M 21 16 L 28 20 L 28 20 L 21 24 Z" />
+                </svg>
+            </button>
+            <button class="icon-btn" title="Maju 10 Detik">
+                <i class="fa-solid fa-rotate-right"></i>
+            </button>
+        </div>
+
+        <div class="player-center">
+            <div class="song-title">Judul Siaran Madyapadma Voice of Trisma</div>
+            <div class="progress-container">
+                <span class="time-text">0:00</span>
+                <input type="range" class="progress-bar" min="0" max="100" value="0">
+                <span class="time-text">45:30</span>
+            </div>
+        </div>
+
+        <div class="player-tools">
+            <div class="volume-container">
+                <button class="icon-btn" id="volumeBtn" title="Volume">
+                    <i class="fa-solid fa-volume-high"></i>
+                </button>
+                <div class="volume-slider-wrapper" id="volumeSliderWrapper">
+                    <input type="range" class="volume-slider" min="0" max="100" value="100">
+                </div>
+            </div>
+
+            <button class="icon-btn" title="Opsi / Unduh">
+                <i class="fa-solid fa-ellipsis-vertical"></i>
+            </button>
+        </div>
+    </div>
+
+    <script>
+        // Logika Sidebar
+        function toggleSidebar() {
+            document.body.classList.toggle('sidebar-toggled');
+        }
+
+        // Logika untuk tombol Play / Pause
+        const playPauseBtn = document.getElementById('playPauseBtn');
+        const morphPath = document.querySelector('.morph-path');
+        let isPlaying = false;
+
+        playPauseBtn.addEventListener('click', function () {
+            isPlaying = !isPlaying;
+            if (isPlaying) {
+                // Berubah menjadi garis-garis (pause)
+                morphPath.classList.add('paused');
+            } else {
+                // Kembali membentu segitiga (play)
+                morphPath.classList.remove('paused');
+            }
+        });
+
+        // Logika untuk menampilkan / menyembunyikan popup volume
+        const volumeBtn = document.getElementById('volumeBtn');
+        const volumeSliderWrapper = document.getElementById('volumeSliderWrapper');
+
+        // Saat ikon volume diklik
+        volumeBtn.addEventListener('click', function (event) {
+            event.stopPropagation(); // Mencegah klik bocor ke dokumen
+            volumeSliderWrapper.classList.toggle('show');
+        });
+
+        // Menutup popup volume jika klik di sembarang tempat di luar popup
+        document.addEventListener('click', function (event) {
+            if (!volumeSliderWrapper.contains(event.target)) {
+                volumeSliderWrapper.classList.remove('show');
+            }
+        });
+
+        // Mencegah popup tertutup saat sedang menggeser slider volume
+        volumeSliderWrapper.addEventListener('click', function (event) {
+            event.stopPropagation();
+        });
+    </script>
+</body>
+
+</html>
