@@ -18,7 +18,7 @@ jobs:
           repository: Sparkplugx1904/voiceoftrisma
           path: source_repo
           sparse-checkout: |
-            template/0
+            template/main
             LICENSE
             README.md
             template/sitemap.xml
@@ -41,8 +41,8 @@ jobs:
           # Bersihkan repo target
           rm -rf web/*
           
-          # Pindahkan isi dari template/0 ke root web
-          cp -r source_repo/template/0/* web/
+          # Pindahkan isi dari template/main ke root web
+          cp -r source_repo/template/main/* web/
           
           # Pindahkan file individu ke root web
           cp source_repo/LICENSE web/
