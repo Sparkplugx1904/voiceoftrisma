@@ -24,10 +24,10 @@ jobs:
       #     path: /tmp/ip_history.txt
       #     key: ip-history-window
 
-      # - name: Setup Cloudflare WARP
-      #   uses: fscarmen/warp-on-actions@v1.4
-      #   with:
-      #     stack: dual
+      - name: Setup Cloudflare WARP
+        uses: fscarmen/warp-on-actions@v1.4
+        with:
+          stack: dual
 
       # - name: Verify WARP + Rotate IP (window 3)
       #   run: |
