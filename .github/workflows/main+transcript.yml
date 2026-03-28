@@ -12,7 +12,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        suffix: ["-s 0 -p 0"]
+        suffix: ["-s 0 -p 0 --with-vpn"]
     outputs:
       url_s0p0: ${{ steps.map.outputs.url_s0p0 }}
       id_s0p0:  ${{ steps.map.outputs.id_s0p0 }}
