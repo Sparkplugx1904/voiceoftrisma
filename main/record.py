@@ -502,8 +502,11 @@ def _warp_connect():
     return ok
 
 
-def _warp_restart_for_new_ip(old_ip):
-    """Restart WARP berulang sampai dapat IP baru."""
+def _warp_restart_for_new_ip(old_ip, stream_url=None):
+    """
+    Restart WARP berulang sampai dapat IP baru yang bisa reach server.
+    Jika stream_url diberikan, verifikasi koneksi ke server setelah rotasi.
+    """
     for attempt in range(1, VPN_MAX_WARP_RETRIES + 1):
         log(f"[WARP] Restart koneksi (percobaan {attempt}/{VPN_MAX_WARP_RETRIES})...")
         _warp_disconnect()
@@ -513,12 +516,28 @@ def _warp_restart_for_new_ip(old_ip):
             log("[WARN] Gagal mendapatkan IP setelah reconnect, coba lagi...")
             continue
         log(f"[IP] IP setelah reconnect: {new_ip}")
-        if new_ip != old_ip:
-            log(f"[OK] IP baru diperoleh! {old_ip} → {new_ip}")
-            return True, new_ip
-        else:
+        if new_ip == old_ip:
             log(f"[WARN] IP masih sama ({new_ip}), restart lagi...")
-    log(f"[FAIL] Gagal mendapatkan IP baru setelah {VPN_MAX_WARP_RETRIES} percobaan.")
+            continue
+
+        log(f"[OK] IP baru diperoleh! {old_ip} → {new_ip}")
+
+        # Verifikasi: apakah IP baru bisa reach server?
+        if stream_url:
+            log(f"[WARP] Verifikasi koneksi ke server dengan IP {new_ip}...")
+            try:
+                r = requests.get(stream_url, stream=True, timeout=5, verify=False, headers=get_headers())
+                r.close()
+                log(f"[OK] IP {new_ip} berhasil reach server (HTTP {r.status_code})!")
+                return True, new_ip
+            except requests.exceptions.RequestException:
+                log(f"[WARN] IP {new_ip} masih diblokir server — rotasi lagi...")
+                old_ip = new_ip  # update agar percobaan berikutnya cari IP berbeda
+                continue
+        else:
+            return True, new_ip
+
+    log(f"[FAIL] Gagal mendapatkan IP yang bisa reach server setelah {VPN_MAX_WARP_RETRIES} percobaan.")
     return False, old_ip
 
 
@@ -721,31 +740,38 @@ def wait_for_stream(url):
             )
             response.close()
 
-            if response.status_code < 400:
+            if response.status_code in (200, 206):
+                # Stream aktif — langsung rekam
                 log(f"[OK] Stream merespons (HTTP {response.status_code}) — memulai perekaman...")
                 return
+            elif response.status_code == 401:
+                # Server terjangkau tapi siaran belum on-air
+                # 401 berarti IP kita tidak diblokir — polling terus sampai siaran mulai
+                log(f"[OFFLINE] Server terjangkau (HTTP 401) — siaran belum aktif, menunggu...")
+                last_err = None  # reset agar error berikutnya tetap terlog
             else:
                 if last_err != f"http_{response.status_code}":
                     log(f"[OFFLINE] Server merespons HTTP {response.status_code} — siaran belum aktif")
                     last_err = f"http_{response.status_code}"
 
         except requests.exceptions.RequestException:
-            if last_err != "unreachable":
-                log("[ERROR] Tidak dapat menjangkau server — kemungkinan IP diblokir. Rotasi IP...")
-                last_err = "unreachable"
-                if ARGS and ARGS.with_vpn:
-                    old_ip = _vpn_get_ip()
-                    if old_ip and _vpn_is_cloudflare(old_ip):
-                        success, new_ip = _warp_restart_for_new_ip(old_ip)
-                        if success:
-                            log(f"[WARP] IP dirotasi: {old_ip} → {new_ip}")
-                            _refresh_headers()
-                        else:
-                            log("[WARN] Rotasi IP gagal, lanjut menunggu...")
+            log("[ERROR] Tidak dapat menjangkau server — kemungkinan IP diblokir. Rotasi IP...")
+            if ARGS and ARGS.with_vpn:
+                old_ip = _vpn_get_ip()
+                if old_ip and _vpn_is_cloudflare(old_ip):
+                    success, new_ip = _warp_restart_for_new_ip(old_ip, stream_url=url)
+                    if success:
+                        log(f"[WARP] IP dirotasi ke {new_ip} dan server terjangkau — lanjut polling...")
+                        _refresh_headers()
                     else:
-                        log("[WARN] WARP tidak aktif, skip rotasi IP.")
+                        log("[WARN] Rotasi IP gagal, lanjut menunggu dengan interval normal...")
                 else:
-                    log("[WARN] Server tidak terjangkau. Tambahkan --with-vpn untuk rotasi IP otomatis.")
+                    log("[WARN] WARP tidak aktif, skip rotasi IP.")
+            else:
+                log("[WARN] Server tidak terjangkau. Tambahkan --with-vpn untuk rotasi IP otomatis.")
+            # Selalu reset last_err agar setiap poll berikutnya bisa trigger rotasi lagi
+            # jika server masih tidak terjangkau
+            last_err = None
 
         time.sleep(interval)
 
