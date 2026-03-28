@@ -27,7 +27,7 @@ jobs:
       - name: Setup Cloudflare WARP
         uses: fscarmen/warp-on-actions@v1.4
         with:
-          stack: ipv4
+          stack: dual
 
       # - name: Verify WARP + Rotate IP (window 3)
       #   run: |

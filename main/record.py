@@ -13,6 +13,7 @@ import threading
 import re
 import shutil
 import queue
+import random
 
 # --- Setup dasar ---
 os.system("chmod +x ffmpeg ffprobe")
@@ -86,6 +87,80 @@ TAG_COLORS = {
     "[RESTART]"     : TIME_COLOR,
     "[PING]"        : TIME_COLOR,
 }
+
+
+# =============================================
+# HTTP FINGERPRINT — Randomized Headers
+# =============================================
+_UA_POOL = [
+    # Chrome Windows
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 11.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    # Chrome macOS
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_4_1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
+    # Firefox Windows
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:124.0) Gecko/20100101 Firefox/124.0",
+    # Firefox Linux
+    "Mozilla/5.0 (X11; Linux x86_64; rv:125.0) Gecko/20100101 Firefox/125.0",
+    # Edge
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 Edg/124.0.0.0",
+    # Safari macOS
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_4_1) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4.1 Safari/605.1.15",
+]
+
+_ACCEPT_POOL = [
+    "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+    "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8",
+    "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+]
+
+_LANG_POOL = [
+    "id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7",
+    "en-US,en;q=0.9,id;q=0.8",
+    "id,en-US;q=0.9,en;q=0.8",
+    "en-GB,en;q=0.9,id;q=0.8",
+]
+
+_REFERER_POOL = [
+    "https://www.google.com/",
+    "https://www.google.co.id/",
+    "https://www.bing.com/",
+    "",  # Kadang tidak ada referrer
+]
+
+# Satu set header yang di-generate per-run (konsisten dalam satu sesi)
+def _generate_headers():
+    ua = random.choice(_UA_POOL)
+    headers = {
+        "User-Agent": ua,
+        "Accept": random.choice(_ACCEPT_POOL),
+        "Accept-Language": random.choice(_LANG_POOL),
+        "Accept-Encoding": "gzip, deflate, br",
+        "Connection": "keep-alive",
+        "Upgrade-Insecure-Requests": "1",
+        "DNT": random.choice(["1", "0"]),
+        "Cache-Control": random.choice(["no-cache", "max-age=0"]),
+    }
+    ref = random.choice(_REFERER_POOL)
+    if ref:
+        headers["Referer"] = ref
+    return headers
+
+# Header default — di-generate sekali saat startup, bisa di-refresh dengan _refresh_headers()
+_SESSION_HEADERS = _generate_headers()
+
+def _refresh_headers():
+    """Generate ulang headers (dipanggil saat rotasi IP)."""
+    global _SESSION_HEADERS
+    _SESSION_HEADERS = _generate_headers()
+    log(f"[VPN] Headers di-refresh: UA={_SESSION_HEADERS['User-Agent'][:60]}...")
+
+def get_headers():
+    """Kembalikan headers session saat ini."""
+    return _SESSION_HEADERS.copy()
 
 
 # =============================================
@@ -379,7 +454,7 @@ def _run_wg(args, timeout=15):
 def _vpn_get_ip():
     """Dapatkan IP publik saat ini."""
     try:
-        resp = requests.get(VPN_IP_CHECK_URL, timeout=10)
+        resp = requests.get(VPN_IP_CHECK_URL, timeout=10, headers=get_headers())
         if resp.status_code == 200:
             return resp.text.strip()
     except Exception:
@@ -395,7 +470,7 @@ def _vpn_is_cloudflare(ip):
 def _vpn_ping_stats():
     """Ping stats_url, return True jika HTTP 200."""
     try:
-        resp = requests.get(VPN_STATS_URL, timeout=5, verify=False)
+        resp = requests.get(VPN_STATS_URL, timeout=5, verify=False, headers=get_headers())
         return resp.status_code == 200
     except Exception:
         return False
@@ -517,6 +592,7 @@ def print_help_banner():
 {BOLD}{INFO_COLOR}⏭️  Skip / Disable:{RESET}
 {TIME_COLOR}─────────────────────────────────────────────────────────────────{RESET}
 
+  {WARN_COLOR}--with-vpn{RESET}                 Aktifkan WARP VPN & rotasi IP otomatis jika diblokir
   {WARN_COLOR}--skip-check{RESET}               Lewati pengecekan stream online
   {WARN_COLOR}--no-timer-limit{RESET}           Abaikan batasan waktu (jam 18:30, dll)
   {WARN_COLOR}--no-record{RESET}                Skip perekaman ffmpeg
@@ -632,7 +708,7 @@ def wait_for_stream(url):
             last_interval = interval
 
         try:
-            response = requests.get(stats_url, timeout=5, verify=False)
+            response = requests.get(stats_url, timeout=5, verify=False, headers=get_headers())
 
             if response.status_code == 200:
                 data = response.json()
@@ -655,15 +731,19 @@ def wait_for_stream(url):
                 log("[ERROR] Tidak dapat menjangkau server — kemungkinan IP diblokir. Rotasi IP...")
                 last_err = "unreachable"
                 # Rotasi IP WARP: mungkin IP kita diblokir server
-                old_ip = _vpn_get_ip()
-                if old_ip and _vpn_is_cloudflare(old_ip):
-                    success, new_ip = _warp_restart_for_new_ip(old_ip)
-                    if success:
-                        log(f"[WARP] IP dirotasi: {old_ip} → {new_ip}")
+                if ARGS and ARGS.with_vpn:
+                    old_ip = _vpn_get_ip()
+                    if old_ip and _vpn_is_cloudflare(old_ip):
+                        success, new_ip = _warp_restart_for_new_ip(old_ip)
+                        if success:
+                            log(f"[WARP] IP dirotasi: {old_ip} → {new_ip}")
+                            _refresh_headers()
+                        else:
+                            log("[WARN] Rotasi IP gagal, lanjut menunggu...")
                     else:
-                        log("[WARN] Rotasi IP gagal, lanjut menunggu...")
+                        log("[WARN] WARP tidak aktif, skip rotasi IP.")
                 else:
-                    log("[WARN] WARP tidak aktif, skip rotasi IP.")
+                    log("[WARN] Server tidak terjangkau. Tambahkan --with-vpn untuk rotasi IP otomatis.")
         except ValueError:
             if last_err != "json_err":
                 log("[JSON-ERR] Respons server tidak terbaca...")
@@ -1022,6 +1102,7 @@ def main_recording():
     parser.add_argument("-s", "--suffix", type=str, default="", help="Suffix di akhir nama file")
     parser.add_argument("-p", "--position", type=int, default=0, help="Posisi untuk delay upload (delay = position * 10 detik)")
     parser.add_argument("--skip-check", action="store_true", help="Lewati pengecekan stream, langsung mulai rekam")
+    parser.add_argument("--with-vpn", action="store_true", help="Aktifkan WARP VPN (rotasi IP jika diblokir)")
     parser.add_argument("--no-upload", action="store_true", help="Rekam saja tanpa upload ke archive.org")
     parser.add_argument("--hide-banner", action="store_true", help="Sembunyikan banner help saat startup")
 
@@ -1053,8 +1134,11 @@ def main_recording():
 
     stream_url = ARGS.stream_url if ARGS.stream_url else "http://i.klikhost.com:8502/stream"
 
-    # VPN auto-connect sebelum mulai
-    vpn_check()
+    # VPN auto-connect sebelum mulai (hanya jika --with-vpn aktif)
+    if ARGS.with_vpn:
+        vpn_check()
+    else:
+        log("[VPN] Mode VPN dinonaktifkan (--with-vpn tidak disetel). Skip.")
 
     if ARGS.skip_check:
         log("[SKIP] Pengecekan stream dilewati, langsung mulai rekam...")
@@ -1074,6 +1158,7 @@ if __name__ == "__main__":
     pre_parser = argparse.ArgumentParser(add_help=False)
     pre_parser.add_argument("--no-timer-limit", action="store_true", default=False)
     pre_parser.add_argument("--no-log", action="store_true", default=False)
+    pre_parser.add_argument("--with-vpn", action="store_true", default=False)
     pre_parser.add_argument("--hide-banner", action="store_true", default=False)
     pre_args, _ = pre_parser.parse_known_args()
 
@@ -1084,6 +1169,7 @@ if __name__ == "__main__":
     class _TempArgs:
         no_log = pre_args.no_log
         no_timer_limit = pre_args.no_timer_limit
+        with_vpn = pre_args.with_vpn
         no_record = False
         stream_file_format = None
         output_name = None
