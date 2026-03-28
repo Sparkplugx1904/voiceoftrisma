@@ -481,36 +481,40 @@ def vpn_check():
     else:
         log("[WARN] Tidak dapat mendeteksi IP publik.")
 
-    if current_ip and _vpn_is_cloudflare(current_ip):
-        # Sudah pakai IP Cloudflare → restart untuk dapat IP baru
-        log(f"[VPN] Sudah terkoneksi Cloudflare ({current_ip}). Restart untuk IP baru...")
-        success, new_ip = _warp_restart_for_new_ip(current_ip)
-        if success:
-            log(f"[OK] IP baru: {new_ip}")
-        else:
-            log("[WARN] Gagal mendapatkan IP baru, lanjut dengan IP saat ini.")
-    else:
-        # Belum pakai Cloudflare → connect
+    # ── FASE 2b: Koneksi awal jika belum pakai Cloudflare ──
+    if not (current_ip and _vpn_is_cloudflare(current_ip)):
         log("[VPN] Belum terkoneksi Cloudflare WARP. Menghubungkan...")
         if _warp_connect():
             time.sleep(3)
-            new_ip = _vpn_get_ip()
-            if new_ip:
-                log(f"[IP] IP setelah connect: {new_ip}")
-                if _vpn_is_cloudflare(new_ip):
+            current_ip = _vpn_get_ip()
+            if current_ip:
+                log(f"[IP] IP setelah connect: {current_ip}")
+                if _vpn_is_cloudflare(current_ip):
                     log("[OK] Berhasil terkoneksi ke Cloudflare WARP!")
                 else:
-                    log(f"[WARN] IP bukan Cloudflare ({new_ip}). WARP mungkin belum aktif.")
+                    log(f"[WARN] IP bukan Cloudflare ({current_ip}). WARP mungkin belum aktif.")
             else:
                 log("[WARN] Tidak dapat mendeteksi IP setelah connect.")
         else:
             log("[FAIL] Gagal menghubungkan WARP. Lanjut tanpa VPN...")
 
-    # Verifikasi akhir
-    if _vpn_ping_stats():
-        log("[OK] Stats server dapat dijangkau setelah setup VPN.")
-    else:
-        log("[WARN] Stats server masih tidak merespons setelah setup VPN.")
+    # ── FASE 3: Loop reconnect sampai stats server merespons ──
+    for cycle in range(1, VPN_MAX_WARP_RETRIES + 1):
+        log(f"[PING] Verifikasi stats server setelah VPN (siklus {cycle}/{VPN_MAX_WARP_RETRIES})...")
+        if _vpn_ping_stats():
+            log("[OK] Stats server dapat dijangkau setelah setup VPN.")
+            return
+
+        log(f"[WARN] Stats server masih tidak merespons (siklus {cycle}/{VPN_MAX_WARP_RETRIES}). Restart WARP...")
+        old_ip = current_ip or _vpn_get_ip()
+        log(f"[VPN] IP saat ini: {old_ip}. Restart untuk IP baru...")
+        success, current_ip = _warp_restart_for_new_ip(old_ip)
+        if success:
+            log(f"[OK] IP baru: {current_ip}")
+        else:
+            log("[WARN] Gagal mendapatkan IP baru, coba ping lagi dengan IP saat ini...")
+
+    log(f"[FAIL] Stats server tidak merespons setelah {VPN_MAX_WARP_RETRIES} siklus reconnect. Lanjut tanpa jaminan koneksi.")
 
 
 # =============================================
