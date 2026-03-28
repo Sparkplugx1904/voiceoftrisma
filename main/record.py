@@ -361,16 +361,15 @@ VPN_WG_INTERFACE = os.environ.get("WARP_WG_INTERFACE", "warp")
 
 
 def _run_wg(args, timeout=15):
-    """Jalankan perintah WireGuard/ip dengan argumen tertentu."""
-    cmd = args
+    """Jalankan perintah wg-quick/ip dengan argumen tertentu."""
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        result = subprocess.run(args, capture_output=True, text=True, timeout=timeout)
         return result.returncode == 0, (result.stdout + result.stderr).strip()
     except FileNotFoundError:
-        log(f"[ERROR] Perintah tidak ditemukan: {cmd[0]}")
+        log(f"[ERROR] Perintah tidak ditemukan: {args[0]}")
         return False, ""
     except subprocess.TimeoutExpired:
-        log(f"[WARN] Perintah timeout ({timeout}s): {' '.join(cmd)}")
+        log(f"[WARN] Perintah timeout ({timeout}s): {' '.join(args)}")
         return False, ""
     except Exception as e:
         log(f"[ERROR] Gagal menjalankan perintah: {e}")
@@ -406,7 +405,6 @@ def _warp_disconnect():
     log("[WARP] Memutuskan koneksi WARP (wg-quick down)...")
     ok, out = _run_wg(["sudo", "wg-quick", "down", VPN_WG_INTERFACE])
     if not ok:
-        # Fallback: coba via ip link set down
         ok, out = _run_wg(["sudo", "ip", "link", "set", VPN_WG_INTERFACE, "down"])
     if ok:
         log("[WARP] Koneksi WARP diputus.")
@@ -420,7 +418,6 @@ def _warp_connect():
     log("[WARP] Menghubungkan ke WARP (wg-quick up)...")
     ok, out = _run_wg(["sudo", "wg-quick", "up", VPN_WG_INTERFACE])
     if not ok:
-        # Fallback: coba via ip link set up
         ok, out = _run_wg(["sudo", "ip", "link", "set", VPN_WG_INTERFACE, "up"])
     if ok:
         log("[WARP] Perintah connect berhasil dikirim.")
@@ -452,28 +449,11 @@ def _warp_restart_for_new_ip(old_ip):
 
 def vpn_check():
     """
-    Cek koneksi ke stats server. Jika gagal 5x → connect/reconnect WARP.
-    Dipanggil sebelum wait_for_stream().
+    Pastikan WARP terhubung dengan IP Cloudflare.
+    TIDAK menunggu/poll stats server — itu tugas wait_for_stream().
     """
     log("[VPN] Memulai pengecekan koneksi (VPN auto-connect)...")
     log(f"[INFO] WARP Mode: WireGuard interface [{VPN_WG_INTERFACE}]")
-
-    # ── FASE 1: Ping stats_url ──
-    fail_count = 0
-    for attempt in range(1, VPN_MAX_PING_RETRIES + 1):
-        log(f"[PING] Percobaan {attempt}/{VPN_MAX_PING_RETRIES}...")
-        if _vpn_ping_stats():
-            log("[OK] Stats server merespons (HTTP 200). VPN tidak diperlukan.")
-            return
-        fail_count += 1
-        log(f"[FAIL] Gagal ping ({fail_count}/{VPN_MAX_PING_RETRIES})")
-        if fail_count < VPN_MAX_PING_RETRIES:
-            log(f"[WAIT] Menunggu {VPN_PING_INTERVAL}s sebelum percobaan berikutnya...")
-            time.sleep(VPN_PING_INTERVAL)
-
-    # ── FASE 2: Semua ping gagal — kelola WARP ──
-    log(f"[ERROR] Stats server tidak merespons setelah {VPN_MAX_PING_RETRIES} percobaan.")
-    log("[VPN] Memeriksa koneksi saat ini...")
 
     current_ip = _vpn_get_ip()
     if current_ip:
@@ -481,40 +461,21 @@ def vpn_check():
     else:
         log("[WARN] Tidak dapat mendeteksi IP publik.")
 
-    # ── FASE 2b: Koneksi awal jika belum pakai Cloudflare ──
-    if not (current_ip and _vpn_is_cloudflare(current_ip)):
+    if current_ip and _vpn_is_cloudflare(current_ip):
+        log(f"[OK] WARP sudah terhubung ({current_ip}). Siap melanjutkan.")
+    else:
         log("[VPN] Belum terkoneksi Cloudflare WARP. Menghubungkan...")
-        if _warp_connect():
-            time.sleep(3)
-            current_ip = _vpn_get_ip()
-            if current_ip:
-                log(f"[IP] IP setelah connect: {current_ip}")
-                if _vpn_is_cloudflare(current_ip):
-                    log("[OK] Berhasil terkoneksi ke Cloudflare WARP!")
-                else:
-                    log(f"[WARN] IP bukan Cloudflare ({current_ip}). WARP mungkin belum aktif.")
+        _warp_connect()
+        time.sleep(3)
+        new_ip = _vpn_get_ip()
+        if new_ip:
+            log(f"[IP] IP setelah connect: {new_ip}")
+            if _vpn_is_cloudflare(new_ip):
+                log("[OK] Berhasil terkoneksi ke Cloudflare WARP!")
             else:
-                log("[WARN] Tidak dapat mendeteksi IP setelah connect.")
+                log(f"[WARN] IP bukan Cloudflare ({new_ip}). WARP mungkin belum aktif.")
         else:
-            log("[FAIL] Gagal menghubungkan WARP. Lanjut tanpa VPN...")
-
-    # ── FASE 3: Loop reconnect sampai stats server merespons ──
-    for cycle in range(1, VPN_MAX_WARP_RETRIES + 1):
-        log(f"[PING] Verifikasi stats server setelah VPN (siklus {cycle}/{VPN_MAX_WARP_RETRIES})...")
-        if _vpn_ping_stats():
-            log("[OK] Stats server dapat dijangkau setelah setup VPN.")
-            return
-
-        log(f"[WARN] Stats server masih tidak merespons (siklus {cycle}/{VPN_MAX_WARP_RETRIES}). Restart WARP...")
-        old_ip = current_ip or _vpn_get_ip()
-        log(f"[VPN] IP saat ini: {old_ip}. Restart untuk IP baru...")
-        success, current_ip = _warp_restart_for_new_ip(old_ip)
-        if success:
-            log(f"[OK] IP baru: {current_ip}")
-        else:
-            log("[WARN] Gagal mendapatkan IP baru, coba ping lagi dengan IP saat ini...")
-
-    log(f"[FAIL] Stats server tidak merespons setelah {VPN_MAX_WARP_RETRIES} siklus reconnect. Lanjut tanpa jaminan koneksi.")
+            log("[WARN] Tidak dapat mendeteksi IP setelah connect.")
 
 
 # =============================================
@@ -691,8 +652,18 @@ def wait_for_stream(url):
 
         except requests.exceptions.RequestException:
             if last_err != "unreachable":
-                log("[ERROR] Tidak dapat menjangkau server...")
+                log("[ERROR] Tidak dapat menjangkau server — kemungkinan IP diblokir. Rotasi IP...")
                 last_err = "unreachable"
+                # Rotasi IP WARP: mungkin IP kita diblokir server
+                old_ip = _vpn_get_ip()
+                if old_ip and _vpn_is_cloudflare(old_ip):
+                    success, new_ip = _warp_restart_for_new_ip(old_ip)
+                    if success:
+                        log(f"[WARP] IP dirotasi: {old_ip} → {new_ip}")
+                    else:
+                        log("[WARN] Rotasi IP gagal, lanjut menunggu...")
+                else:
+                    log("[WARN] WARP tidak aktif, skip rotasi IP.")
         except ValueError:
             if last_err != "json_err":
                 log("[JSON-ERR] Respons server tidak terbaca...")
