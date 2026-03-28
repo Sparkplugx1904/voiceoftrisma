@@ -649,9 +649,11 @@ def wait_for_stream(url):
 
     Saat jam :00, offset otomatis kembali ke 0 sehingga
     polling kembali ke Tahap 1 yang cepat.
-    """
-    stats_url = "https://i.klikhost.com:8502/stats?json=1"
 
+    Metode deteksi: ping langsung ke stream URL (bukan stats endpoint).
+    Mirip fetch() no-cors — koneksi dibuka, header diterima, langsung ditutup.
+    Kalau server merespons tanpa error = stream hidup, langsung mulai rekam.
+    """
     STAGES = [
         (   0,  120,   3),
         ( 120,  180,   5),
@@ -677,10 +679,10 @@ def wait_for_stream(url):
         30: "5–10 mnt", 60: "10–30 mnt", 90: "30–50 mnt", 120: "50–60 mnt",
     }
     last_interval = None
-    last_err = None  # dedup hanya untuk error/warn, bukan OFFLINE
+    last_err = None
     last_seen_hour = now_wita().hour
 
-    log("[WAIT] Menunggu siaran — mode polling bertahap aktif...")
+    log(f"[WAIT] Menunggu siaran — ping langsung ke stream: {url}")
 
     while True:
         # /skip-stage: skip waiting
@@ -696,41 +698,41 @@ def wait_for_stream(url):
         if current_hour != last_seen_hour:
             log(f"[WAIT] Reset polling — jam :{current_hour:02d}:00 "
                 f"(kembali ke Tahap 1, interval 3s)")
-            last_interval = None  # paksa re-log tahap
+            last_interval = None
             last_seen_hour = current_hour
 
         interval = get_interval(elapsed)
         mm, ss = divmod(elapsed, 60)
 
-        # Hanya tampilkan saat transisi tahap, dengan elapsed time
+        # Hanya tampilkan saat transisi tahap
         if interval != last_interval:
             log(f"[WAIT] Tahap berubah → +{mm}m {ss:02d}s — interval ping: {interval}s ({stage_labels.get(interval, '?')})")
             last_interval = interval
 
         try:
-            response = requests.get(stats_url, timeout=5, verify=False, headers=get_headers())
+            # Ping ke stream URL langsung — stream=True agar tidak membaca body audio
+            # Cukup tunggu response headers saja, lalu tutup koneksi
+            response = requests.get(
+                url,
+                stream=True,
+                timeout=5,
+                verify=False,
+                headers=get_headers()
+            )
+            response.close()
 
-            if response.status_code == 200:
-                data = response.json()
-                status = data.get("streamstatus", 0)
-
-                if status == 1:
-                    log("[OK] Siaran terdeteksi! Memulai perekaman...")
-                    return
-                else:
-                    # OFFLINE selalu tampil tiap poll agar user tahu masih aktif
-                    log(f"[OFFLINE] Server merespons — siaran belum dimulai")
-                    last_err = None
+            if response.status_code < 400:
+                log(f"[OK] Stream merespons (HTTP {response.status_code}) — memulai perekaman...")
+                return
             else:
                 if last_err != f"http_{response.status_code}":
-                    log(f"[WARN] Status HTTP {response.status_code}")
+                    log(f"[OFFLINE] Server merespons HTTP {response.status_code} — siaran belum aktif")
                     last_err = f"http_{response.status_code}"
 
         except requests.exceptions.RequestException:
             if last_err != "unreachable":
                 log("[ERROR] Tidak dapat menjangkau server — kemungkinan IP diblokir. Rotasi IP...")
                 last_err = "unreachable"
-                # Rotasi IP WARP: mungkin IP kita diblokir server
                 if ARGS and ARGS.with_vpn:
                     old_ip = _vpn_get_ip()
                     if old_ip and _vpn_is_cloudflare(old_ip):
@@ -744,10 +746,6 @@ def wait_for_stream(url):
                         log("[WARN] WARP tidak aktif, skip rotasi IP.")
                 else:
                     log("[WARN] Server tidak terjangkau. Tambahkan --with-vpn untuk rotasi IP otomatis.")
-        except ValueError:
-            if last_err != "json_err":
-                log("[JSON-ERR] Respons server tidak terbaca...")
-                last_err = "json_err"
 
         time.sleep(interval)
 
