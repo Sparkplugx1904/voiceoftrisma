@@ -356,32 +356,24 @@ VPN_PING_INTERVAL = 10
 VPN_MAX_WARP_RETRIES = 10
 VPN_WARP_RECONNECT_WAIT = 5
 
-# Deteksi path warp-cli
-_warp_cli = shutil.which("warp-cli")
-if not _warp_cli:
-    _default = r"C:\Program Files\Cloudflare\Cloudflare WARP\warp-cli.exe"
-    if os.path.isfile(_default):
-        _warp_cli = _default
-if not _warp_cli:
-    _warp_cli = "warp-cli"
-VPN_WARP_CLI = _warp_cli
+# Nama interface WireGuard WARP (dari fscarmen/warp-on-actions)
+VPN_WG_INTERFACE = os.environ.get("WARP_WG_INTERFACE", "warp")
 
 
-def _run_warp(args, timeout=15):
-    """Jalankan warp-cli dengan argumen tertentu."""
-    cmd = [VPN_WARP_CLI] + args
+def _run_wg(args, timeout=15):
+    """Jalankan perintah WireGuard/ip dengan argumen tertentu."""
+    cmd = args
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
-        return result.returncode == 0, result.stdout.strip()
+        return result.returncode == 0, (result.stdout + result.stderr).strip()
     except FileNotFoundError:
-        log(f"[ERROR] warp-cli tidak ditemukan di: {VPN_WARP_CLI}")
-        log(f"[ERROR] Install Cloudflare WARP: https://1.1.1.1/")
+        log(f"[ERROR] Perintah tidak ditemukan: {cmd[0]}")
         return False, ""
     except subprocess.TimeoutExpired:
-        log(f"[WARN] warp-cli timeout ({timeout}s)")
+        log(f"[WARN] Perintah timeout ({timeout}s): {' '.join(cmd)}")
         return False, ""
     except Exception as e:
-        log(f"[ERROR] Gagal menjalankan warp-cli: {e}")
+        log(f"[ERROR] Gagal menjalankan perintah: {e}")
         return False, ""
 
 
@@ -411,8 +403,11 @@ def _vpn_ping_stats():
 
 
 def _warp_disconnect():
-    log("[WARP] Memutuskan koneksi WARP...")
-    ok, out = _run_warp(["disconnect"])
+    log("[WARP] Memutuskan koneksi WARP (wg-quick down)...")
+    ok, out = _run_wg(["sudo", "wg-quick", "down", VPN_WG_INTERFACE])
+    if not ok:
+        # Fallback: coba via ip link set down
+        ok, out = _run_wg(["sudo", "ip", "link", "set", VPN_WG_INTERFACE, "down"])
     if ok:
         log("[WARP] Koneksi WARP diputus.")
     else:
@@ -422,8 +417,11 @@ def _warp_disconnect():
 
 
 def _warp_connect():
-    log("[WARP] Menghubungkan ke WARP...")
-    ok, out = _run_warp(["connect"])
+    log("[WARP] Menghubungkan ke WARP (wg-quick up)...")
+    ok, out = _run_wg(["sudo", "wg-quick", "up", VPN_WG_INTERFACE])
+    if not ok:
+        # Fallback: coba via ip link set up
+        ok, out = _run_wg(["sudo", "ip", "link", "set", VPN_WG_INTERFACE, "up"])
     if ok:
         log("[WARP] Perintah connect berhasil dikirim.")
     else:
@@ -458,7 +456,7 @@ def vpn_check():
     Dipanggil sebelum wait_for_stream().
     """
     log("[VPN] Memulai pengecekan koneksi (VPN auto-connect)...")
-    log(f"[INFO] WARP CLI: {VPN_WARP_CLI}")
+    log(f"[INFO] WARP Mode: WireGuard interface [{VPN_WG_INTERFACE}]")
 
     # ── FASE 1: Ping stats_url ──
     fail_count = 0
