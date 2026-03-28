@@ -18,16 +18,16 @@ jobs:
       id_s0p0:  ${{ steps.map.outputs.id_s0p0 }}
 
     steps:
-      - name: Restore IP History
-        uses: actions/cache/restore@v4
-        with:
-          path: /tmp/ip_history.txt
-          key: ip-history-window
+      # - name: Restore IP History
+      #   uses: actions/cache/restore@v4
+      #   with:
+      #     path: /tmp/ip_history.txt
+      #     key: ip-history-window
 
-      - name: Setup Cloudflare WARP
-        uses: fscarmen/warp-on-actions@v1.4
-        with:
-          stack: dual
+      # - name: Setup Cloudflare WARP
+      #   uses: fscarmen/warp-on-actions@v1.4
+      #   with:
+      #     stack: dual
 
       # - name: Verify WARP + Rotate IP (window 3)
       #   run: |
