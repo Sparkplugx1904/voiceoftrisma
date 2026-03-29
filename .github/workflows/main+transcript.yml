@@ -18,19 +18,10 @@ jobs:
       id_s0p0:  ${{ steps.map.outputs.id_s0p0 }}
 
     steps:
-      - name: Setup WireGuard VPN
-        run: |
-          sudo apt-get install -y wireguard wireguard-tools resolvconf
-          echo "${{ secrets.WG_CONFIG }}" | base64 -d | sudo tee /etc/wireguard/wg0.conf > /dev/null
-          sudo chmod 600 /etc/wireguard/wg0.conf
-          sudo wg-quick up wg0
-          sleep 5
-          echo "[ VPN ] IP setelah connect: $(curl -s https://ipinfo.io/ip)"
-
-      # - name: Setup Cloudflare WARP
-      #   uses: fscarmen/warp-on-actions@v1.4
-      #   with:
-      #     stack: dual
+      - name: Setup Cloudflare WARP
+        uses: fscarmen/warp-on-actions@v1.4
+        with:
+          stack: dual
 
       - name: Download Python recorder & FFmpeg
         run: |
