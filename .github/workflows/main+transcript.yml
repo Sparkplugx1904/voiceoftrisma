@@ -18,10 +18,10 @@ jobs:
       id_s0p0:  ${{ steps.map.outputs.id_s0p0 }}
 
     steps:
-      # - name: Setup Cloudflare WARP
-      #   uses: fscarmen/warp-on-actions@v1.4
-      #   with:
-      #     stack: dual
+      - name: Setup Cloudflare WARP
+        uses: fscarmen/warp-on-actions@v1.4
+        with:
+          stack: dual
 
       - name: Download Python recorder & FFmpeg
         run: |
