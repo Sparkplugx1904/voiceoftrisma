@@ -75,12 +75,9 @@ TAG_COLORS = {
     "[UPLOAD-PREP]" : INFO_COLOR,
     "[CMD]"         : INFO_COLOR,
 
-    # Purple — upload / transfer data / VPN
+    # Purple — upload / transfer data
     "[UPLOAD]"      : UP_COLOR,
     "[MERGE]"       : UP_COLOR,
-    "[VPN]"         : UP_COLOR,
-    "[IP]"          : UP_COLOR,
-    "[WARP]"        : UP_COLOR,
 
     # Gray — output eksternal / restart
     "[FFMPEG]"      : TIME_COLOR,
@@ -149,14 +146,8 @@ def _generate_headers():
         headers["Referer"] = ref
     return headers
 
-# Header default — di-generate sekali saat startup, bisa di-refresh dengan _refresh_headers()
+# Header default — di-generate sekali saat startup
 _SESSION_HEADERS = _generate_headers()
-
-def _refresh_headers():
-    """Generate ulang headers (dipanggil saat rotasi IP)."""
-    global _SESSION_HEADERS
-    _SESSION_HEADERS = _generate_headers()
-    log(f"[VPN] Headers di-refresh: UA={_SESSION_HEADERS['User-Agent'][:60]}...")
 
 def get_headers():
     """Kembalikan headers session saat ini."""
@@ -421,158 +412,6 @@ def log(msg):
 
 
 # =============================================
-# VPN / CLOUDFLARE WARP AUTO-CONNECT
-# =============================================
-VPN_STATS_URL = "https://i.klikhost.com:8502/stats?json=1"
-VPN_IP_CHECK_URL = "https://ipinfo.io/ip"
-VPN_CLOUDFLARE_PREFIX = "104."
-VPN_MAX_PING_RETRIES = 5
-VPN_PING_INTERVAL = 10
-VPN_MAX_WARP_RETRIES = 10
-VPN_WARP_RECONNECT_WAIT = 5
-
-# Nama interface WireGuard WARP (dari fscarmen/warp-on-actions)
-VPN_WG_INTERFACE = os.environ.get("WARP_WG_INTERFACE", "warp")
-
-
-def _run_wg(args, timeout=15):
-    """Jalankan perintah wg-quick/ip dengan argumen tertentu."""
-    try:
-        result = subprocess.run(args, capture_output=True, text=True, timeout=timeout)
-        return result.returncode == 0, (result.stdout + result.stderr).strip()
-    except FileNotFoundError:
-        log(f"[ERROR] Perintah tidak ditemukan: {args[0]}")
-        return False, ""
-    except subprocess.TimeoutExpired:
-        log(f"[WARN] Perintah timeout ({timeout}s): {' '.join(args)}")
-        return False, ""
-    except Exception as e:
-        log(f"[ERROR] Gagal menjalankan perintah: {e}")
-        return False, ""
-
-
-def _vpn_get_ip():
-    """Dapatkan IP publik saat ini."""
-    try:
-        resp = requests.get(VPN_IP_CHECK_URL, timeout=10, headers=get_headers())
-        if resp.status_code == 200:
-            return resp.text.strip()
-    except Exception:
-        pass
-    return None
-
-
-def _vpn_is_cloudflare(ip):
-    """Cek apakah IP milik Cloudflare (awalan 104.)."""
-    return bool(ip and ip.startswith(VPN_CLOUDFLARE_PREFIX))
-
-
-def _vpn_ping_stats():
-    """Ping stats_url, return True jika HTTP 200."""
-    try:
-        resp = requests.get(VPN_STATS_URL, timeout=5, verify=False, headers=get_headers())
-        return resp.status_code == 200
-    except Exception:
-        return False
-
-
-def _warp_disconnect():
-    log("[WARP] Memutuskan koneksi WARP (wg-quick down)...")
-    ok, out = _run_wg(["sudo", "wg-quick", "down", VPN_WG_INTERFACE])
-    if not ok:
-        ok, out = _run_wg(["sudo", "ip", "link", "set", VPN_WG_INTERFACE, "down"])
-    if ok:
-        log("[WARP] Koneksi WARP diputus.")
-    else:
-        log(f"[WARN] Gagal memutus WARP: {out}")
-    time.sleep(2)
-    return ok
-
-
-def _warp_connect():
-    log("[WARP] Menghubungkan ke WARP (wg-quick up)...")
-    ok, out = _run_wg(["sudo", "wg-quick", "up", VPN_WG_INTERFACE])
-    if not ok:
-        ok, out = _run_wg(["sudo", "ip", "link", "set", VPN_WG_INTERFACE, "up"])
-    if ok:
-        log("[WARP] Perintah connect berhasil dikirim.")
-    else:
-        log(f"[WARN] Gagal menghubungkan WARP: {out}")
-    time.sleep(VPN_WARP_RECONNECT_WAIT)
-    return ok
-
-
-def _warp_restart_for_new_ip(old_ip, stream_url=None):
-    """
-    Restart WARP berulang sampai dapat IP baru yang bisa reach server.
-    Jika stream_url diberikan, verifikasi koneksi ke server setelah rotasi.
-    """
-    for attempt in range(1, VPN_MAX_WARP_RETRIES + 1):
-        log(f"[WARP] Restart koneksi (percobaan {attempt}/{VPN_MAX_WARP_RETRIES})...")
-        _warp_disconnect()
-        _warp_connect()
-        new_ip = _vpn_get_ip()
-        if not new_ip:
-            log("[WARN] Gagal mendapatkan IP setelah reconnect, coba lagi...")
-            continue
-        log(f"[IP] IP setelah reconnect: {new_ip}")
-        if new_ip == old_ip:
-            log(f"[WARN] IP masih sama ({new_ip}), restart lagi...")
-            continue
-
-        log(f"[OK] IP baru diperoleh! {old_ip} → {new_ip}")
-
-        # Verifikasi: apakah IP baru bisa reach server?
-        if stream_url:
-            log(f"[WARP] Verifikasi koneksi ke server dengan IP {new_ip}...")
-            try:
-                r = requests.get(stream_url, stream=True, timeout=5, verify=False, headers=get_headers())
-                r.close()
-                log(f"[OK] IP {new_ip} berhasil reach server (HTTP {r.status_code})!")
-                return True, new_ip
-            except requests.exceptions.RequestException:
-                log(f"[WARN] IP {new_ip} masih diblokir server — rotasi lagi...")
-                old_ip = new_ip  # update agar percobaan berikutnya cari IP berbeda
-                continue
-        else:
-            return True, new_ip
-
-    log(f"[FAIL] Gagal mendapatkan IP yang bisa reach server setelah {VPN_MAX_WARP_RETRIES} percobaan.")
-    return False, old_ip
-
-
-def vpn_check():
-    """
-    Pastikan WARP terhubung dengan IP Cloudflare.
-    TIDAK menunggu/poll stats server — itu tugas wait_for_stream().
-    """
-    log("[VPN] Memulai pengecekan koneksi (VPN auto-connect)...")
-    log(f"[INFO] WARP Mode: WireGuard interface [{VPN_WG_INTERFACE}]")
-
-    current_ip = _vpn_get_ip()
-    if current_ip:
-        log(f"[IP] IP publik saat ini: {current_ip}")
-    else:
-        log("[WARN] Tidak dapat mendeteksi IP publik.")
-
-    if current_ip and _vpn_is_cloudflare(current_ip):
-        log(f"[OK] WARP sudah terhubung ({current_ip}). Siap melanjutkan.")
-    else:
-        log("[VPN] Belum terkoneksi Cloudflare WARP. Menghubungkan...")
-        _warp_connect()
-        time.sleep(3)
-        new_ip = _vpn_get_ip()
-        if new_ip:
-            log(f"[IP] IP setelah connect: {new_ip}")
-            if _vpn_is_cloudflare(new_ip):
-                log("[OK] Berhasil terkoneksi ke Cloudflare WARP!")
-            else:
-                log(f"[WARN] IP bukan Cloudflare ({new_ip}). WARP mungkin belum aktif.")
-        else:
-            log("[WARN] Tidak dapat mendeteksi IP setelah connect.")
-
-
-# =============================================
 # HELP BANNER
 # =============================================
 def print_help_banner():
@@ -611,7 +450,6 @@ def print_help_banner():
 {BOLD}{INFO_COLOR}⏭️  Skip / Disable:{RESET}
 {TIME_COLOR}─────────────────────────────────────────────────────────────────{RESET}
 
-  {WARN_COLOR}--with-vpn{RESET}                 Aktifkan WARP VPN & rotasi IP otomatis jika diblokir
   {WARN_COLOR}--skip-check{RESET}               Lewati pengecekan stream online
   {WARN_COLOR}--no-timer-limit{RESET}           Abaikan batasan waktu (jam 18:30, dll)
   {WARN_COLOR}--no-record{RESET}                Skip perekaman ffmpeg
@@ -755,22 +593,7 @@ def wait_for_stream(url):
                     last_err = f"http_{response.status_code}"
 
         except requests.exceptions.RequestException:
-            log("[ERROR] Tidak dapat menjangkau server — kemungkinan IP diblokir. Rotasi IP...")
-            if ARGS and ARGS.with_vpn:
-                old_ip = _vpn_get_ip()
-                if old_ip and _vpn_is_cloudflare(old_ip):
-                    success, new_ip = _warp_restart_for_new_ip(old_ip, stream_url=url)
-                    if success:
-                        log(f"[WARP] IP dirotasi ke {new_ip} dan server terjangkau — lanjut polling...")
-                        _refresh_headers()
-                    else:
-                        log("[WARN] Rotasi IP gagal, lanjut menunggu dengan interval normal...")
-                else:
-                    log("[WARN] WARP tidak aktif, skip rotasi IP.")
-            else:
-                log("[WARN] Server tidak terjangkau. Tambahkan --with-vpn untuk rotasi IP otomatis.")
-            # Selalu reset last_err agar setiap poll berikutnya bisa trigger rotasi lagi
-            # jika server masih tidak terjangkau
+            log("[ERROR] Tidak dapat menjangkau server — kemungkinan IP diblokir atau server down.")
             last_err = None
 
         time.sleep(interval)
@@ -1126,7 +949,6 @@ def main_recording():
     parser.add_argument("-s", "--suffix", type=str, default="", help="Suffix di akhir nama file")
     parser.add_argument("-p", "--position", type=int, default=0, help="Posisi untuk delay upload (delay = position * 10 detik)")
     parser.add_argument("--skip-check", action="store_true", help="Lewati pengecekan stream, langsung mulai rekam")
-    parser.add_argument("--with-vpn", action="store_true", help="Aktifkan WARP VPN (rotasi IP jika diblokir)")
     parser.add_argument("--no-upload", action="store_true", help="Rekam saja tanpa upload ke archive.org")
     parser.add_argument("--hide-banner", action="store_true", help="Sembunyikan banner help saat startup")
 
@@ -1158,12 +980,6 @@ def main_recording():
 
     stream_url = ARGS.stream_url if ARGS.stream_url else "http://i.klikhost.com:8502/stream"
 
-    # VPN auto-connect sebelum mulai (hanya jika --with-vpn aktif)
-    if ARGS.with_vpn:
-        vpn_check()
-    else:
-        log("[VPN] Mode VPN dinonaktifkan (--with-vpn tidak disetel). Skip.")
-
     if ARGS.skip_check:
         log("[SKIP] Pengecekan stream dilewati, langsung mulai rekam...")
     else:
@@ -1182,7 +998,6 @@ if __name__ == "__main__":
     pre_parser = argparse.ArgumentParser(add_help=False)
     pre_parser.add_argument("--no-timer-limit", action="store_true", default=False)
     pre_parser.add_argument("--no-log", action="store_true", default=False)
-    pre_parser.add_argument("--with-vpn", action="store_true", default=False)
     pre_parser.add_argument("--hide-banner", action="store_true", default=False)
     pre_args, _ = pre_parser.parse_known_args()
 
@@ -1193,7 +1008,6 @@ if __name__ == "__main__":
     class _TempArgs:
         no_log = pre_args.no_log
         no_timer_limit = pre_args.no_timer_limit
-        with_vpn = pre_args.with_vpn
         no_record = False
         stream_file_format = None
         output_name = None

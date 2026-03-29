@@ -18,75 +18,10 @@ jobs:
       id_s0p0:  ${{ steps.map.outputs.id_s0p0 }}
 
     steps:
-      # - name: Restore IP History
-      #   uses: actions/cache/restore@v4
+      # - name: Setup Cloudflare WARP
+      #   uses: fscarmen/warp-on-actions@v1.4
       #   with:
-      #     path: /tmp/ip_history.txt
-      #     key: ip-history-window
-
-      - name: Setup Cloudflare WARP
-        uses: fscarmen/warp-on-actions@v1.4
-        with:
-          stack: dual
-
-      # - name: Verify WARP + Rotate IP (window 3)
-      #   run: |
-      #     # Buat file kosong jika belum ada (run pertama)
-      #     touch /tmp/ip_history.txt
-      #     HISTORY=$(cat /tmp/ip_history.txt)
-      #     echo "[ INFO ] History IP: ${HISTORY:-'(kosong)'}"
-
-      #     for i in {1..10}; do
-      #       CURRENT_IP=$(curl -s https://ipinfo.io/ip)
-      #       echo "[ TRY $i ] IP: $CURRENT_IP"
-
-      #       if [ -z "$CURRENT_IP" ]; then
-      #         echo "⚠️ Gagal dapat IP, coba lagi..."
-      #         sleep 3
-      #         continue
-      #       fi
-
-      #       if grep -qF "$CURRENT_IP" /tmp/ip_history.txt 2>/dev/null; then
-      #         echo "⚠️ IP ada di history, reconnect..."
-      #         warp-cli disconnect 2>/dev/null || true
-      #         sleep 2
-      #         warp-cli connect 2>/dev/null || true
-      #         sleep 5
-      #         continue
-      #       fi
-
-      #       STATUS=$(curl -s https://www.cloudflare.com/cdn-cgi/trace | grep "warp")
-      #       echo "[ INFO ] $STATUS"
-      #       if echo "$STATUS" | grep -q "warp=on"; then
-      #         echo "✅ WARP aktif! IP diterima: $CURRENT_IP"
-      #       else
-      #         echo "⚠️ WARP mungkin belum aktif, lanjut tetap..."
-      #       fi
-
-      #       # Update history, simpan 3 terakhir
-      #       echo "$CURRENT_IP" >> /tmp/ip_history.txt
-      #       tail -3 /tmp/ip_history.txt > /tmp/ip_history_tmp.txt
-      #       mv /tmp/ip_history_tmp.txt /tmp/ip_history.txt
-      #       echo "[ INFO ] History baru: $(cat /tmp/ip_history.txt | tr '\n' ' ')"
-      #       break
-      #     done
-
-      # - name: Save IP History
-      #   if: always()
-      #   uses: actions/cache/save@v4
-      #   with:
-      #     path: /tmp/ip_history.txt
-      #     key: ip-history-window
-
-      # - name: Verify WARP
-      #   run: |
-      #     STATUS=$(curl -s https://www.cloudflare.com/cdn-cgi/trace | grep "warp")
-      #     echo "[ INFO ] $STATUS"
-      #     if echo "$STATUS" | grep -q "warp=on"; then
-      #       echo "✅ WARP aktif!"
-      #     else
-      #       echo "⚠️ WARP mungkin belum aktif, lanjut tetap..."
-      #     fi
+      #     stack: dual
 
       - name: Download Python recorder & FFmpeg
         run: |
