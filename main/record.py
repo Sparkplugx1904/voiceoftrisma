@@ -14,6 +14,7 @@ import re
 import shutil
 import queue
 import random
+import concurrent.futures
 
 # --- Setup dasar ---
 os.system("chmod +x ffmpeg ffprobe")
@@ -74,6 +75,8 @@ TAG_COLORS = {
     "[CODEC]"       : INFO_COLOR,
     "[UPLOAD-PREP]" : INFO_COLOR,
     "[CMD]"         : INFO_COLOR,
+    "[PROXY-SEARCH]": INFO_COLOR,
+    "[PROXY-OK]"    : INFO_COLOR,
 
     # Purple — upload / transfer data
     "[UPLOAD]"      : UP_COLOR,
@@ -83,6 +86,9 @@ TAG_COLORS = {
     "[FFMPEG]"      : TIME_COLOR,
     "[RESTART]"     : TIME_COLOR,
     "[PING]"        : TIME_COLOR,
+
+    # Added proxy fail to warning/error based logging
+    "[PROXY-FAIL]"  : ERR_COLOR,
 }
 
 
@@ -447,6 +453,11 @@ def print_help_banner():
   {WARN_COLOR}--archive-access, --archive-acc{RESET} {TEXT_COLOR}<KEY>{RESET}  Archive.org access key
   {WARN_COLOR}--archive-secret, --archive-sec{RESET} {TEXT_COLOR}<KEY>{RESET}  Archive.org secret key
 
+{BOLD}{INFO_COLOR}🌐 Proxy Settings:{RESET}
+{TIME_COLOR}─────────────────────────────────────────────────────────────────{RESET}
+  {WARN_COLOR}--proxy{RESET} {TEXT_COLOR}<URL>{RESET}                 Manual proxy (e.g., http://... atau socks5://...)
+  {WARN_COLOR}--random-proxy{RESET}                 Cari dan aktifkan proxy gratis otomatis
+
 {BOLD}{INFO_COLOR}⏭️  Skip / Disable:{RESET}
 {TIME_COLOR}─────────────────────────────────────────────────────────────────{RESET}
 
@@ -488,6 +499,107 @@ if "--no-upload" not in sys.argv:
 def now_wita():
     """Waktu lokal WITA"""
     return datetime.datetime.now(datetime.UTC).astimezone(WITA_TZ)
+
+# =============================================
+# PROXY AUTO-FINDER
+# =============================================
+SELECTED_PROXY = None
+
+def get_proxies_dict(proxy_url):
+    if proxy_url:
+        return {"http": proxy_url, "https": proxy_url}
+    return None
+
+def find_working_proxy():
+    """
+    Mencari proxy secara otomatis dari proxifly/free-proxy-list,
+    dan mencoba ping ke target stat server.
+    Berhenti pada proxy pertama yang mendapatkan HTTP 200 OK.
+    """
+    url_list = os.environ.get("CDN_PROXY")
+    url_list_fallback = os.environ.get("GH_PROXY")
+
+    target_url = "http://i.klikhost.com:8502/stats?json=1"
+    
+    log("[PROXY-SEARCH] Mengunduh daftar proxy terbaru...")
+    proxies = []
+    
+    for url_target in [url_list, url_list_fallback]:
+        try:
+            req = requests.get(url_target, timeout=10, headers=get_headers())
+            if req.status_code == 200:
+                lines = req.text.split('\n')
+                proxies = [p.strip() for p in lines if p.strip()]
+                break
+        except Exception as e:
+            log(f"[WARN] Gagal dari {url_target}: {e}")
+            
+    if not proxies:
+        log("[PROXY-FAIL] Semua url list proxy gagal diambil.")
+        return None
+        
+    if not proxies:
+        log("[PROXY-FAIL] Daftar proxy kosong, menghentikan pencarian otomatis.")
+        return None
+        
+    log(f"[PROXY-SEARCH] Memulai pengecekan {len(proxies)} proxy secara paralel (Batch: 50)...")
+    
+    found_proxy = None
+    stop_event = threading.Event()
+    
+    def check_proxy(px):
+        if stop_event.is_set():
+            return None
+        
+        proxies_dict = {"http": px, "https": px}
+        try:
+            # timeout 5 detik, persis logikanya JS
+            res = requests.get(target_url, proxies=proxies_dict, timeout=5, verify=False)
+            if stop_event.is_set():
+                return None
+                
+            if res.status_code == 200:
+                if not stop_event.is_set():
+                    stop_event.set()  # hentikan request/worker lain yang menunggu
+                    log(f"[PROXY-OK] [BERHASIL] Proxy: {px} | Status Code: {res.status_code}")
+                    return px
+            else:
+                if not stop_event.is_set():
+                    log(f"[PROXY-FAIL] [GAGAL] Proxy: {px} | Status Code: {res.status_code}")
+        except requests.exceptions.Timeout:
+            if not stop_event.is_set():
+                log(f"[PROXY-FAIL] [GAGAL] Proxy: {px} | Error: Timeout (lambat/mati)")
+        except requests.exceptions.RequestException as e:
+            if not stop_event.is_set():
+                err_msg = type(e).__name__
+                log(f"[PROXY-FAIL] [GAGAL] Proxy: {px} | Error: {err_msg}")
+        return None
+
+    executor = concurrent.futures.ThreadPoolExecutor(max_workers=50)
+    futures = [executor.submit(check_proxy, p) for p in proxies]
+        
+    for future in concurrent.futures.as_completed(futures):
+        res = future.result()
+        if res:
+            found_proxy = res
+            stop_event.set()
+            try:
+                # Cancel antrean yang belum running dan jangan tunggu worker yang sedang berjalan
+                executor.shutdown(wait=False, cancel_futures=True)
+            except TypeError:
+                executor.shutdown(wait=False)
+            break
+                
+    if found_proxy:
+        log(f"[PROXY-OK] Selesai. Proxy terpilih: {found_proxy}")
+    else:
+        log("[PROXY-FAIL] Selesai. Tidak ada satupun proxy yang merespons 200 OK.")
+        try:
+            executor.shutdown(wait=False, cancel_futures=True)
+        except:
+            executor.shutdown(wait=False)
+        
+    return found_proxy
 
 
 # =============================================
@@ -574,7 +686,8 @@ def wait_for_stream(url):
                 stream=True,
                 timeout=5,
                 verify=False,
-                headers=get_headers()
+                headers=get_headers(),
+                proxies=get_proxies_dict(SELECTED_PROXY)
             )
             response.close()
 
@@ -721,6 +834,19 @@ def run_ffmpeg(url, suffix="", position=0, no_upload=False):
     date_str = now_wita().strftime("%d-%m-%y")
     os.makedirs("recordings", exist_ok=True)
 
+    # Siapkan environment variables untuk proxy
+    env_vars = os.environ.copy()
+    if SELECTED_PROXY:
+        if SELECTED_PROXY.startswith("socks"):
+            # Workaround: ffmpeg tidak support socks via '-http_proxy'. Kita set environment all_proxy
+            env_vars["all_proxy"] = SELECTED_PROXY
+            log(f"[PROXY-OK] Meluncurkan FFmpeg/FFprobe dengan Environment all_proxy (SOCKS): {SELECTED_PROXY}")
+        else:
+            # Bisa via HTTP_PROXY environment
+            env_vars["http_proxy"] = SELECTED_PROXY
+            env_vars["https_proxy"] = SELECTED_PROXY
+            log(f"[PROXY-OK] Meluncurkan FFmpeg/FFprobe dengan Environment HTTP Proxy: {SELECTED_PROXY}")
+
     # Tentukan format/ext file
     if ARGS and ARGS.stream_file_format:
         ext = ARGS.stream_file_format.lower().strip(".")
@@ -733,7 +859,7 @@ def run_ffmpeg(url, suffix="", position=0, no_upload=False):
                 "-select_streams", "a:0",
                 "-show_entries", "stream=codec_name",
                 "-of", "default=nokey=1:noprint_wrappers=1", url
-            ], timeout=15).decode().strip()
+            ], timeout=15, env=env_vars).decode().strip()
             log(f"[CODEC] Format audio: {codec}")
         except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
             codec = "mp3"
@@ -772,7 +898,7 @@ def run_ffmpeg(url, suffix="", position=0, no_upload=False):
     cmd.append(filename)
 
     log(f"[RUN] Rekaman dimulai → {filename}")
-    process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, bufsize=1)
+    process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, bufsize=1, env=env_vars)
 
     def log_ffmpeg(proc):
         for line in proc.stderr:
@@ -970,6 +1096,11 @@ def main_recording():
                         help="Format file stream (mp3, wav, aac, dll) — skip ffprobe")
     parser.add_argument("--duration", type=int, default=None,
                         help="Durasi rekaman dalam detik (misal: 10 = 10 detik)")
+                        
+    parser.add_argument("--proxy", type=str, default=None,
+                        help="Gunakan manual proxy (misal: http://192.168.1.1:8080 atau socks5://ip:port)")
+    parser.add_argument("--random-proxy", action="store_true",
+                        help="Jalankan proxy finder otomatis dan gunakan proxy gratis yang bekerja")
 
     ARGS = parser.parse_args()
 
@@ -979,6 +1110,22 @@ def main_recording():
         MY_SECRET_KEY = ARGS.archive_secret
 
     stream_url = ARGS.stream_url if ARGS.stream_url else "http://i.klikhost.com:8502/stream"
+
+    # Evaluasi Proxy
+    global SELECTED_PROXY
+    if ARGS.random_proxy:
+        log("[PROXY-SEARCH] Opsi --random-proxy diaktifkan. Mencari proxy...")
+        found = find_working_proxy()
+        if found:
+            SELECTED_PROXY = found
+        else:
+            log("[WARN] auto-proxy gagal menemukan (atau koneksi habis), fallback ke koneksi langsung.")
+            SELECTED_PROXY = None
+    elif ARGS.proxy:
+        SELECTED_PROXY = ARGS.proxy
+        log(f"[PROXY-OK] Menggunakan manual proxy: {SELECTED_PROXY}")
+    else:
+        SELECTED_PROXY = None
 
     if ARGS.skip_check:
         log("[SKIP] Pengecekan stream dilewati, langsung mulai rekam...")

@@ -12,7 +12,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        suffix: ["-s 0 -p 0 --no-timer-limit"]
+        suffix: ["-s 0 -p 0 --random-proxy"]
     outputs:
       url_s0p0: ${{ steps.map.outputs.url_s0p0 }}
       id_s0p0:  ${{ steps.map.outputs.id_s0p0 }}
@@ -44,9 +44,11 @@ jobs:
         env:
           MY_ACCESS_KEY: ${{ secrets.MY_ACCESS_KEY }}
           MY_SECRET_KEY: ${{ secrets.MY_SECRET_KEY }}
+          CDN_PROXY: ${{ secrets.CDN_PROXY }}
+          GH_PROXY: ${{ secrets.GH_PROXY }}
+
         run: |
           mkdir -p recordings
-
           python3 -u record.py ${{ matrix.suffix }} 
 
       - name: Map environment vars to matrix outputs
