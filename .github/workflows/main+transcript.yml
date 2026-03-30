@@ -46,6 +46,7 @@ jobs:
           MY_SECRET_KEY: ${{ secrets.MY_SECRET_KEY }}
           CDN_PROXY: ${{ secrets.CDN_PROXY }}
           GH_PROXY: ${{ secrets.GH_PROXY }}
+          GIST_TOKEN: ${{ secrets.GIST_TOKEN }}
 
         run: |
           mkdir -p recordings
