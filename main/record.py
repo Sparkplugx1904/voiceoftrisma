@@ -638,7 +638,11 @@ def find_working_proxy():
         if stop_event.is_set():
             return None
 
-        # ── TES 2: Ping stream URL (mirip apa yang akan dilakukan ffmpeg) ──
+        # ── TES 2: Ping stream URL + validasi Content-Type audio ──
+        # Proxy HTTP biasa (forward proxy / Cloudflare) kadang merespons HTTP 200
+        # tapi mengembalikan HTML error page, bukan raw audio stream.
+        # FFmpeg lebih ketat: ia akan gagal dengan "Invalid data found when processing input"
+        # jika response bukan audio. Kita deteksi ini lewat Content-Type header.
         try:
             ping = requests.get(
                 target_stream,
@@ -649,11 +653,32 @@ def find_working_proxy():
             )
             ping.close()
 
-            if ping.status_code in (200, 206, 401):
+            if ping.status_code == 401:
+                # Server hidup, siaran belum on-air — proxy tembus, content-type belum relevan
                 if not stop_event.is_set():
                     stop_event.set()
-                    log(f"[PROXY-OK] [BERHASIL] Proxy: {px} | Stats OK, Stream: HTTP {ping.status_code}")
+                    log(f"[PROXY-OK] [BERHASIL] Proxy: {px} | Stats OK, Stream: HTTP 401 (on-air belum mulai)")
                     return px
+            elif ping.status_code in (200, 206):
+                # Harus validasi Content-Type — proxy forward bisa mengembalikan HTML dengan status 200
+                ct = ping.headers.get("Content-Type", "").lower()
+                is_audio = (
+                    ct.startswith("audio/")
+                    or "mpeg" in ct
+                    or "ogg" in ct
+                    or "aac" in ct
+                    or "octet-stream" in ct  # beberapa server radio pakai ini
+                    or ping.headers.get("icy-name") is not None  # header khas Icecast/Shoutcast
+                    or ping.headers.get("icy-br") is not None
+                )
+                if is_audio:
+                    if not stop_event.is_set():
+                        stop_event.set()
+                        log(f"[PROXY-OK] [BERHASIL] Proxy: {px} | Stats OK, Stream: HTTP {ping.status_code} | Content-Type: {ct or '(icy)'}")
+                        return px
+                else:
+                    if not stop_event.is_set():
+                        log(f"[PROXY-FAIL] [GAGAL] Proxy: {px} | Stream HTTP 200 tapi Content-Type bukan audio: '{ct}' (proxy intercept)")
             else:
                 if not stop_event.is_set():
                     log(f"[PROXY-FAIL] [GAGAL] Proxy: {px} | Stream HTTP {ping.status_code} (bukan 200/401)")
@@ -1143,6 +1168,21 @@ def run_ffmpeg(url, suffix="", position=0, no_upload=False):
         log("[SKIP] --no-merge-chunks aktif. Merge chunk dilewati.")
 
     log(f"[UPLOAD-PREP] Siap upload: {filename_to_upload}")
+
+    # Guard: jangan upload jika file tidak ada (ffmpeg exit sebelum sempat menulis)
+    if not os.path.exists(filename_to_upload):
+        log(f"[WARN] File tidak ditemukan (ffmpeg mungkin exit terlalu cepat): {filename_to_upload}")
+        log("[SKIP] Upload dibatalkan — tidak ada file yang bisa diupload.")
+        return
+
+    if os.path.getsize(filename_to_upload) == 0:
+        log(f"[WARN] File kosong (0 byte), kemungkinan rekaman gagal total: {filename_to_upload}")
+        try:
+            os.remove(filename_to_upload)
+            log(f"[CLEAN] File kosong dihapus: {filename_to_upload}")
+        except Exception:
+            pass
+        return
 
     if no_upload:
         log(f"[SKIP] Mode tanpa upload aktif. File tersimpan di {filename_to_upload}")
