@@ -141,7 +141,7 @@ def _generate_headers():
         "User-Agent": ua,
         "Accept": random.choice(_ACCEPT_POOL),
         "Accept-Language": random.choice(_LANG_POOL),
-        "Accept-Encoding": "gzip, deflate, br",
+        "Accept-Encoding": "gzip, deflate",
         "Connection": "keep-alive",
         "Upgrade-Insecure-Requests": "1",
         "DNT": random.choice(["1", "0"]),

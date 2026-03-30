@@ -1,3 +1,4 @@
 requests 
 internetarchive
 requests[socks]
+brotli
