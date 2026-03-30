@@ -518,16 +518,6 @@ PROXY_SOURCES = [
     "https://raw.githubusercontent.com/TheSpeedX/PROXY-List/refs/heads/master/http.txt",
 ]
 
-# Blacklist proxy yang sudah terbukti gagal saat digunakan ffmpeg.
-# Persisten selama proses berjalan — mencegah proxy sama dipilih ulang.
-_PROXY_BLACKLIST: set = set()
-
-def mark_proxy_failed(proxy: str):
-    """Tandai proxy sebagai gagal — tidak akan dipilih lagi sampai proses restart."""
-    if proxy:
-        _PROXY_BLACKLIST.add(proxy)
-        log(f"[PROXY-FAIL] Proxy dimasukkan ke blacklist sesi ini: {proxy}")
-
 def get_proxies_dict(proxy_url):
     """Kembalikan dict proxy untuk library requests.
     Menerima format 'ip:port' atau 'http://ip:port'."""
@@ -544,8 +534,8 @@ def find_working_proxy():
     Setiap proxy divalidasi dua kali: tes stats endpoint + tes stream ping.
     Berhenti pada proxy pertama yang lulus kedua tes.
     """
-    target_stats = "http://i.klikhost.com:7501/stats?json=1"
-    target_stream = "http://i.klikhost.com:7501/stream"
+    target_stats = "http://i.klikhost.com:8044/stats?json=1"
+    target_stream = "http://i.klikhost.com:8044/stream"
 
     log("[PROXY-SEARCH] Mengunduh daftar proxy terbaru...")
     proxies_raw = []
@@ -604,15 +594,11 @@ def find_working_proxy():
     proxies_clean = []
     for raw in proxies_raw:
         normalized = normalize_proxy(raw)
-        if normalized and normalized not in _PROXY_BLACKLIST:
+        if normalized:
             proxies_clean.append(normalized)
 
-    blacklisted_count = sum(1 for raw in proxies_raw if normalize_proxy(raw) in _PROXY_BLACKLIST)
-    if blacklisted_count:
-        log(f"[PROXY-SEARCH] {blacklisted_count} proxy dilewati (ada di blacklist sesi ini).")
-
     if not proxies_clean:
-        log("[PROXY-FAIL] Tidak ada proxy valid setelah normalisasi dan filter blacklist.")
+        log("[PROXY-FAIL] Tidak ada proxy valid setelah normalisasi.")
         return None
 
     log(f"[PROXY-SEARCH] {len(proxies_clean)} proxy valid. Memulai pengecekan paralel (Batch: 50)...")
@@ -653,13 +639,6 @@ def find_working_proxy():
             return None
 
         # ── TES 2: Ping stream URL (mirip apa yang akan dilakukan ffmpeg) ──
-        # ── TES 2: Baca bytes aktual dari stream — deteksi proxy intercept ──
-        # Masalah utama: proxy Cloudflare / forward proxy merespons HTTP 200
-        # tapi mengembalikan HTML error page, bukan audio stream.
-        # requests.get() tidak peduli body-nya — hanya lihat status code.
-        # ffmpeg membaca bytes pertama dari body — kalau bukan audio, langsung gagal.
-        # Solusi: baca 512 bytes pertama dari stream, cek apakah mengandung audio magic bytes.
-        # Proxy yang merespons 401 (siaran belum on-air) diterima tanpa cek bytes.
         try:
             ping = requests.get(
                 target_stream,
@@ -668,65 +647,14 @@ def find_working_proxy():
                 timeout=6,
                 verify=False
             )
+            ping.close()
 
-            if ping.status_code == 401:
-                # Siaran belum on-air tapi proxy tembus ke server
-                ping.close()
+            if ping.status_code in (200, 206, 401):
                 if not stop_event.is_set():
                     stop_event.set()
-                    log(f"[PROXY-OK] [BERHASIL] Proxy: {px} | Stats OK, Stream: HTTP 401 (on-air belum mulai)")
+                    log(f"[PROXY-OK] [BERHASIL] Proxy: {px} | Stats OK, Stream: HTTP {ping.status_code}")
                     return px
-
-            elif ping.status_code in (200, 206):
-                # Baca 512 byte pertama dari body untuk deteksi magic bytes audio
-                try:
-                    chunk = next(ping.iter_content(512), b"")
-                finally:
-                    ping.close()
-
-                # Audio magic bytes yang valid:
-                # MP3: 0xFF 0xFB / 0xFF 0xF3 / 0xFF 0xF2 / ID3 tag
-                # AAC/ADTS: 0xFF 0xF1 atau 0xFF 0xF9
-                # Ogg: OggS
-                # ICY/Shoutcast response header (kadang proxy forward header dulu)
-                # HTML intercept: <!DOCTYPE atau <html atau HTTP/ (re-response dari proxy)
-                is_audio_bytes = False
-                if len(chunk) >= 2:
-                    b0, b1 = chunk[0], chunk[1]
-                    # MP3 sync word
-                    if b0 == 0xFF and b1 in (0xFB, 0xFA, 0xF3, 0xF2, 0xE3, 0xE2):
-                        is_audio_bytes = True
-                    # AAC ADTS sync
-                    elif b0 == 0xFF and b1 in (0xF1, 0xF9):
-                        is_audio_bytes = True
-                    # ID3 tag (MP3 dengan metadata)
-                    elif chunk[:3] == b"ID3":
-                        is_audio_bytes = True
-                    # Ogg container
-                    elif chunk[:4] == b"OggS":
-                        is_audio_bytes = True
-                    # ICY response (Shoutcast/Icecast headers)
-                    elif chunk[:3] == b"ICY":
-                        is_audio_bytes = True
-                    # Cek Content-Type sebagai fallback jika bytes tidak conclusive
-                    else:
-                        ct = ping.headers.get("Content-Type", "").lower()
-                        if any(x in ct for x in ("audio/", "mpeg", "ogg", "aac", "octet-stream")):
-                            is_audio_bytes = True
-                        elif ping.headers.get("icy-name") or ping.headers.get("icy-br"):
-                            is_audio_bytes = True
-
-                if is_audio_bytes:
-                    if not stop_event.is_set():
-                        stop_event.set()
-                        log(f"[PROXY-OK] [BERHASIL] Proxy: {px} | Audio bytes valid | Stream: HTTP {ping.status_code}")
-                        return px
-                else:
-                    snippet = chunk[:40].decode("utf-8", errors="replace").replace("\n", " ").strip()
-                    if not stop_event.is_set():
-                        log(f"[PROXY-FAIL] [GAGAL] Proxy: {px} | Bukan audio stream — bytes: '{snippet}...' (proxy intercept)")
             else:
-                ping.close()
                 if not stop_event.is_set():
                     log(f"[PROXY-FAIL] [GAGAL] Proxy: {px} | Stream HTTP {ping.status_code} (bukan 200/401)")
         except requests.exceptions.Timeout:
@@ -770,7 +698,7 @@ def find_working_proxy():
 GIST_TOKEN    = os.environ.get("GIST_TOKEN")
 GIST_ID       = "0d0b5d5e6f1184cadd7da69c74b753c9"
 GIST_FILENAME = "voiceoftrisma-server-status.json"
-GIST_STATS_URL = "https://i.klikhost.com:7501/stats?json=1"
+GIST_STATS_URL = "https://i.klikhost.com:8044/stats?json=1"
 
 def _gist_worker():
     """
@@ -1139,7 +1067,6 @@ def run_ffmpeg(url, suffix="", position=0, no_upload=False):
 
     log(f"[RUN] Rekaman dimulai → {filename}")
     process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, bufsize=1)
-    ffmpeg_start_time = time.monotonic()
 
     def log_ffmpeg(proc):
         for line in proc.stderr:
@@ -1177,13 +1104,6 @@ def run_ffmpeg(url, suffix="", position=0, no_upload=False):
                 break
 
         if process.poll() is not None:
-            elapsed = time.monotonic() - ffmpeg_start_time
-            if elapsed < 10 and SELECTED_PROXY:
-                # FFmpeg mati dalam < 10 detik — hampir pasti masalah proxy, bukan siaran selesai.
-                # Blacklist proxy ini agar tidak dipilih lagi pada iterasi berikutnya.
-                log(f"[FAIL] FFmpeg keluar terlalu cepat ({elapsed:.1f}s) — proxy kemungkinan tidak compatible.")
-                mark_proxy_failed(SELECTED_PROXY)
-
             if not no_timer:
                 now_check = now_wita()
                 if now_check.hour >= 18:
@@ -1357,7 +1277,7 @@ def main_recording():
     if ARGS.archive_secret:
         MY_SECRET_KEY = ARGS.archive_secret
 
-    stream_url = ARGS.stream_url if ARGS.stream_url else "http://i.klikhost.com:7501/stream"
+    stream_url = ARGS.stream_url if ARGS.stream_url else "http://i.klikhost.com:8044/stream"
 
     # Evaluasi Proxy
     global SELECTED_PROXY
