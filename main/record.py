@@ -806,6 +806,15 @@ def push_gist_background(radio_data=None, force=False):
     t.start()
     return t
 
+def publish_gist_offline_force():
+    """Memaksa publish ke Gist dengan status offline dan streamstatus: 0."""
+    log("[PING] Memaksa update Gist ke status offline...")
+    radio_data = {
+        "status": "offline",
+        "message": "Perekaman selesai atau dihentikan.",
+        "streamstatus": 0
+    }
+    push_gist_background(radio_data, force=True)
 
 # =============================================
 # WAIT FOR STREAM
@@ -899,23 +908,25 @@ def wait_for_stream(url):
             )
 
             if response.status_code == 200:
-                radio_json = response.json()
-                # Push data ke Gist di setiap ping (throttled internal di function)
-                push_gist_background(radio_json)
-                
                 res_clean = response.text.replace(" ", "")
                 if '"streamstatus":1' in res_clean:
-                    log(f"[OK] Stream ON-AIR (streamstatus: 1) — memulai perekaman...")
+                    # 1. String ditemukan! Publish ke Gist SEKALI saja.
+                    radio_json = response.json()
+                    push_gist_background(radio_json)
+                    
+                    # 2. Lanjut ke perekaman (keluar dari loop wait)
+                    log(f"[OK] Stream ON-AIR — Gist diperbarui, memulai perekaman...")
                     return
                 else:
+                    # Jika tidak ada "streamstatus":1, ulangi publish dengan fallback offline
+                    push_gist_background(None)
                     if last_err != "offline":
-                        log(f"[OFFLINE] Server merespons tapi siaran OFF-AIR (streamstatus bukan 1) — menunggu...")
+                        log(f"[OFFLINE] Server merespons tapi siaran OFF-AIR — menunggu...")
                         last_err = "offline"
                     else:
-                        # Heartbeat singkat jika sudah offline sebelumnya
                         log(f"[PING] #{ping_count} | Status: OFF-AIR | Interval: {interval}s")
             else:
-                # Juga kirim info offline ke Gist jika server down
+                # Ulangi publish jika error HTTP
                 push_gist_background(None)
                 if last_err != f"http_{response.status_code}":
                     log(f"[OFFLINE] Server merespons HTTP {response.status_code} — menunggu...")
@@ -924,6 +935,8 @@ def wait_for_stream(url):
                     log(f"[PING] #{ping_count} | Status: HTTP {response.status_code} | Interval: {interval}s")
 
         except requests.exceptions.RequestException as e:
+            # Ulangi publish jika gagal menjangkau server
+            push_gist_background(None)
             log(f"[ERROR] #{ping_count} | Gagal menjangkau server: {type(e).__name__}")
             last_err = None
 
@@ -1426,4 +1439,7 @@ if __name__ == "__main__":
             log("[RESTART] Restarting recording loop (no timer limit)...")
             continue
 
+    publish_gist_offline_force()
+    # Beri sedikit waktu agar background thread selesai sebelum program benar-benar mati
+    time.sleep(2) 
     log("[END] Program selesai.")
