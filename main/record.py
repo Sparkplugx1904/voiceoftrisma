@@ -16,6 +16,8 @@ import shutil
 import queue
 import random
 import concurrent.futures
+from dotenv import load_dotenv
+load_dotenv()
 
 # --- Setup dasar ---
 os.system("chmod +x ffmpeg ffprobe")
@@ -550,7 +552,6 @@ def find_working_proxy():
     Berhenti pada proxy pertama yang lulus kedua tes.
     """
     target_stats = "http://i.klikhost.com:8502/stats?json=1"
-    target_stream = "http://i.klikhost.com:8502/stream"
 
     log("[PROXY-SEARCH] Mengunduh daftar proxy terbaru dari semua sumber...")
     proxies_raw = []
@@ -562,7 +563,7 @@ def find_working_proxy():
     # Iterasi SEMUA PROXY_SOURCES dan gabungkan seluruh hasilnya
     for idx, source_url in enumerate(PROXY_SOURCES):
         try:
-            log(f"[PROXY-SEARCH] Mengunduh sumber [{idx}]: {source_url}")
+            log(f"[PROXY-SEARCH] Mengunduh sumber [{idx}]:")
             req = requests.get(source_url, timeout=10, headers=get_headers())
             if req.status_code == 200:
                 lines = req.text.strip().split('\n')
@@ -634,7 +635,7 @@ def find_working_proxy():
         px_url = f"http://{px}"
         proxies_dict = {"http": px_url, "https": px_url}
 
-        # ── TES 1: Endpoint stats (cek konektivitas dasar) ──
+        # ── TES 1: Endpoint stats (Validasi Akses & Isi) ──
         try:
             res = requests.get(
                 target_stats,
@@ -642,10 +643,20 @@ def find_working_proxy():
                 timeout=5,
                 verify=False
             )
-            if res.status_code not in (200, 401):
+            
+            # 1. Harus bisa diakses (HTTP 200)
+            if res.status_code != 200:
                 if not stop_event.is_set():
                     log(f"[PROXY-FAIL] [GAGAL] Proxy: {px} | Stats HTTP {res.status_code}")
                 return None
+                
+            # 2 & 3. Bisa dibaca dan mengandung 'streamstatus'
+            res_text = res.text
+            if "streamstatus" not in res_text:
+                if not stop_event.is_set():
+                    log(f"[PROXY-FAIL] [GAGAL] Proxy: {px} | String 'streamstatus' tidak ditemukan")
+                return None
+
         except requests.exceptions.Timeout:
             if not stop_event.is_set():
                 log(f"[PROXY-FAIL] [GAGAL] Proxy: {px} | Timeout saat tes stats")
@@ -655,34 +666,11 @@ def find_working_proxy():
                 log(f"[PROXY-FAIL] [GAGAL] Proxy: {px} | {type(e).__name__} saat tes stats")
             return None
 
-        if stop_event.is_set():
-            return None
-
-        # ── TES 2: Ping stream URL (mirip apa yang akan dilakukan ffmpeg) ──
-        try:
-            ping = requests.get(
-                target_stream,
-                proxies=proxies_dict,
-                stream=True,
-                timeout=6,
-                verify=False
-            )
-            ping.close()
-
-            if ping.status_code in (200, 206, 401):
-                if not stop_event.is_set():
-                    stop_event.set()
-                    log(f"[PROXY-OK] [BERHASIL] Proxy: {px} | Stats OK, Stream: HTTP {ping.status_code}")
-                    return px
-            else:
-                if not stop_event.is_set():
-                    log(f"[PROXY-FAIL] [GAGAL] Proxy: {px} | Stream HTTP {ping.status_code} (bukan 200/401)")
-        except requests.exceptions.Timeout:
-            if not stop_event.is_set():
-                log(f"[PROXY-FAIL] [GAGAL] Proxy: {px} | Timeout saat tes stream ping")
-        except requests.exceptions.RequestException as e:
-            if not stop_event.is_set():
-                log(f"[PROXY-FAIL] [GAGAL] Proxy: {px} | {type(e).__name__} saat tes stream ping")
+        # Jika lolos Tes 1 dan belum ada proxy lain yang terpilih, maka proxy ini sah!
+        if not stop_event.is_set():
+            stop_event.set()
+            log(f"[PROXY-OK] [BERHASIL] Proxy: {px} | Stats dapat diakses dan terbaca utuh")
+            return px
 
         return None
 
@@ -764,7 +752,14 @@ def _gist_worker():
                 }
             }
         }
-        patch_res = requests.patch(api_url, headers=gist_headers, json=payload, timeout=10)
+        # Memastikan publish Gist tidak akan pernah menggunakan proxy demi keamanan token
+        patch_res = requests.patch(
+            api_url, 
+            headers=gist_headers, 
+            json=payload, 
+            timeout=10, 
+            proxies={"http": None, "https": None}
+        )
 
         if patch_res.status_code == 200:
             gist_raw_url = f"https://gist.githubusercontent.com/Sparkplugx1904/{GIST_ID}/raw/{GIST_FILENAME}"
@@ -835,7 +830,8 @@ def wait_for_stream(url):
     last_err = None
     last_seen_hour = now_wita().hour
 
-    log(f"[WAIT] Menunggu siaran — ping langsung ke stream: {url}")
+    target_stats = "http://i.klikhost.com:8502/stats?json=1"
+    log(f"[WAIT] Menunggu siaran — request ke stats: {target_stats}")
 
     while True:
         # /skip-stage: skip waiting
@@ -863,35 +859,32 @@ def wait_for_stream(url):
             last_interval = interval
 
         try:
-            # Ping ke stream URL langsung — stream=True agar tidak membaca body audio
-            # Cukup tunggu response headers saja, lalu tutup koneksi
             response = requests.get(
-                url,
-                stream=True,
+                target_stats,
                 timeout=5,
                 verify=False,
                 headers=get_headers(),
                 proxies=get_proxies_dict(SELECTED_PROXY)
             )
-            response.close()
 
-            if response.status_code in (200, 206):
-                # Stream aktif — luncurkan Gist publisher di background, lalu langsung rekam
-                log(f"[OK] Stream merespons (HTTP {response.status_code}) — memulai perekaman...")
-                push_gist_background()
-                return
-            elif response.status_code == 401:
-                # Server terjangkau tapi siaran belum on-air
-                # 401 berarti IP kita tidak diblokir — polling terus sampai siaran mulai
-                log(f"[OFFLINE] Server terjangkau (HTTP 401) — siaran belum aktif, menunggu...")
-                last_err = None  # reset agar error berikutnya tetap terlog
+            if response.status_code == 200:
+                # Bersihkan spasi untuk memastikan format tertangkap, baik "streamstatus": 1 maupun "streamstatus":1
+                res_clean = response.text.replace(" ", "")
+                if '"streamstatus":1' in res_clean:
+                    log(f"[OK] Stream ON-AIR (streamstatus: 1) — memulai perekaman...")
+                    push_gist_background()
+                    return
+                else:
+                    if last_err != "offline":
+                        log(f"[OFFLINE] Server merespons tapi siaran OFF-AIR (streamstatus bukan 1) — menunggu...")
+                        last_err = "offline"
             else:
                 if last_err != f"http_{response.status_code}":
-                    log(f"[OFFLINE] Server merespons HTTP {response.status_code} — siaran belum aktif")
+                    log(f"[OFFLINE] Server merespons HTTP {response.status_code} — menunggu...")
                     last_err = f"http_{response.status_code}"
 
         except requests.exceptions.RequestException:
-            log("[ERROR] Tidak dapat menjangkau server — kemungkinan IP diblokir atau server down.")
+            log("[ERROR] Tidak dapat menjangkau server — kemungkinan proxy mati atau server down.")
             last_err = None
 
         time.sleep(interval)

@@ -12,3 +12,7 @@ package.json
 package-lock.json
 /workspaces/VOT-Denpasar/push
 experimental
+main/.env
+main/ffmpeg
+main/ffprobe
+main/ffplay
