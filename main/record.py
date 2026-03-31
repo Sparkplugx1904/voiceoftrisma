@@ -36,27 +36,42 @@ ARGS = None
 TAG_WIDTH = 15
 
 # =============================================
-# ANSI Colors
+# ANSI Color — True Color (24-bit) untuk terminal lokal,
+# fallback ke ANSI 8-color standar di GitHub Actions / CI.
+# GitHub Actions tidak mendukung 24-bit color, sehingga
+# sequence \033[38;2;R;G;Bm tampil sebagai teks literal.
+# Deteksi: env var GITHUB_ACTIONS=true atau NO_COLOR=1
 # =============================================
-# Deteksi apakah script berjalan di dalam GitHub Actions (CI)
-# dimana True Color (24-bit) seringkali dirusak/tidak didukung
-if os.environ.get("GITHUB_ACTIONS") == "true":
-    TIME_COLOR = "\033[90m"   # Bright Black (Gray)
-    INFO_COLOR = "\033[94m"   # Bright Blue
-    WARN_COLOR = "\033[93m"   # Bright Yellow
-    ERR_COLOR  = "\033[91m"    # Bright Red
-    UP_COLOR   = "\033[95m"    # Bright Magenta
-    TEXT_COLOR = "\033[97m"    # Bright White
+_IN_CI    = os.environ.get("GITHUB_ACTIONS", "").lower() == "true"
+_NO_COLOR = os.environ.get("NO_COLOR", "") != ""
+
+if _NO_COLOR:
+    # Matikan semua warna (misal: output diredirect ke file)
+    TIME_COLOR = ""
+    INFO_COLOR = ""
+    WARN_COLOR = ""
+    ERR_COLOR  = ""
+    UP_COLOR   = ""
+    TEXT_COLOR = ""
+    RESET      = ""
+elif _IN_CI:
+    # ANSI 8-color standar — didukung GitHub Actions
+    TIME_COLOR = "\033[90m"   # bright black / dark gray  (timestamp)
+    INFO_COLOR = "\033[94m"   # bright blue               (info/sukses)
+    WARN_COLOR = "\033[93m"   # bright yellow             (peringatan)
+    ERR_COLOR  = "\033[91m"   # bright red                (error)
+    UP_COLOR   = "\033[95m"   # bright magenta            (upload/merge)
+    TEXT_COLOR = "\033[97m"   # bright white              (teks utama)
+    RESET      = "\033[0m"
 else:
-    # True Color ANSI (24-bit RGB)
+    # True Color 24-bit — untuk terminal lokal yang mendukung
     TIME_COLOR = "\033[38;2;139;148;158m"   # #8b949e — abu-abu kebiruan (timestamp)
     INFO_COLOR = "\033[38;2;88;166;255m"    # #58a6ff — biru (info/sukses)
     WARN_COLOR = "\033[38;2;210;153;34m"    # #d29922 — kuning/oranye (peringatan)
     ERR_COLOR  = "\033[38;2;248;81;73m"     # #f85149 — merah (error)
     UP_COLOR   = "\033[38;2;179;137;245m"   # #b389f5 — ungu (upload/merge)
-    TEXT_COLOR = "\033[38;2;201;209;217m"    # #c9d1d9 — abu-abu terang (teks utama)
-
-RESET = "\033[0m"
+    TEXT_COLOR = "\033[38;2;201;209;217m"   # #c9d1d9 — abu-abu terang (teks utama)
+    RESET      = "\033[0m"
 
 TAG_COLORS = {
     # Red — error / berhenti paksa
@@ -519,22 +534,31 @@ def now_wita():
 SELECTED_PROXY = None
 
 # =============================================
+# PROXY SOURCE LIST
+# Diambil dari GitHub Secrets via environment variable HTTP_PROXY.
+# Nilai HTTP_PROXY harus berupa JSON array string, contoh:
+#   ["https://url1.txt", "https://url2.txt", ...]
+# Semua URL dalam daftar akan digunakan sekaligus (bukan hanya satu).
 # =============================================
-# PROXY SOURCE LIST (DARI ENVIRONMENT VARIABLE)
-# =============================================
-PROXY_SOURCES = []
-_http_proxy_env = os.environ.get("HTTP_PROXY")
-if _http_proxy_env:
+def _load_proxy_sources():
+    raw = os.environ.get("HTTP_PROXY", "").strip()
+    if not raw:
+        log("[WARN] Environment variable HTTP_PROXY tidak ditemukan atau kosong. "
+            "Proxy source list akan kosong.")
+        return []
     try:
-        parsed_sources = json.loads(_http_proxy_env)
-        if isinstance(parsed_sources, list):
-            PROXY_SOURCES = parsed_sources
-        else:
-            log("[WARN] HTTP_PROXY bukan JSON array yang valid. Default list kosong.")
-    except Exception as e:
-        log(f"[WARN] Gagal parse HTTP_PROXY JSON: {e}. Default list kosong.")
-else:
-    log("[WARN] Environment variable HTTP_PROXY tidak ditemukan. Default list kosong.")
+        sources = json.loads(raw)
+        if not isinstance(sources, list):
+            log("[WARN] HTTP_PROXY bukan JSON array yang valid. Proxy source list akan kosong.")
+            return []
+        sources = [s for s in sources if isinstance(s, str) and s.strip()]
+        log(f"[ENV] HTTP_PROXY dimuat: {len(sources)} sumber proxy ditemukan.")
+        return sources
+    except json.JSONDecodeError as e:
+        log(f"[WARN] Gagal parse HTTP_PROXY sebagai JSON: {e}. Proxy source list akan kosong.")
+        return []
+
+PROXY_SOURCES = _load_proxy_sources()
 
 def get_proxies_dict(proxy_url):
     """Kembalikan dict proxy untuk library requests.
@@ -551,15 +575,48 @@ def find_working_proxy():
     Mencari proxy secara otomatis dari PROXY_SOURCES array secara berurutan.
     Setiap proxy divalidasi dua kali: tes stats endpoint + tes stream ping.
     Berhenti pada proxy pertama yang lulus kedua tes.
-    Pencarian dilakukan secara lazy (satu sumber diunduh dan dicek sebelum lanjut ke sumber lain).
     """
     target_stats = "http://i.klikhost.com:8502/stats?json=1"
     target_stream = "http://i.klikhost.com:8502/stream"
 
+    log("[PROXY-SEARCH] Mengunduh daftar proxy terbaru dari semua sumber...")
+    proxies_raw = []
+
     if not PROXY_SOURCES:
-        log("[PROXY-FAIL] Tidak ada tuple PROXY_SOURCES valid untuk diverifikasi.")
+        log("[PROXY-FAIL] PROXY_SOURCES kosong. Pastikan HTTP_PROXY sudah diset di GitHub Secrets.")
         return None
 
+    # Iterasi SEMUA PROXY_SOURCES dan gabungkan seluruh hasilnya
+    for idx, source_url in enumerate(PROXY_SOURCES):
+        try:
+            log(f"[PROXY-SEARCH] Mengunduh sumber [{idx}]: {source_url}")
+            req = requests.get(source_url, timeout=10, headers=get_headers())
+            if req.status_code == 200:
+                lines = req.text.strip().split('\n')
+                raw_list = [p.strip() for p in lines if p.strip()]
+                if raw_list:
+                    log(f"[PROXY-SEARCH] Sumber [{idx}]: {len(raw_list)} proxy ditemukan, digabung ke pool.")
+                    proxies_raw.extend(raw_list)
+                else:
+                    log(f"[WARN] Sumber [{idx}] berhasil diunduh tapi daftar kosong.")
+            else:
+                log(f"[WARN] Sumber [{idx}] merespons HTTP {req.status_code}, dilewati.")
+        except Exception as e:
+            log(f"[WARN] Sumber [{idx}] gagal: {e}, dilewati.")
+
+    log(f"[PROXY-SEARCH] Total proxy mentah dari semua sumber: {len(proxies_raw)} entri.")
+
+    if not proxies_raw:
+        log("[PROXY-FAIL] Semua sumber proxy gagal diambil.")
+        return None
+
+    # -----------------------------------------------
+    # NORMALISASI FORMAT PROXY
+    # Handle dua format yang mungkin ada:
+    #   "103.48.71.6:83"            → simpan apa adanya
+    #   "http://49.156.44.115:8080" → strip prefix http://
+    # Output akhir selalu berformat: "ip:port"
+    # -----------------------------------------------
     def normalize_proxy(raw):
         p = raw.strip()
         for prefix in ("https://", "http://"):
@@ -581,114 +638,105 @@ def find_working_proxy():
             return None
         return f"{host}:{port}"
 
-    for idx, source_url in enumerate(PROXY_SOURCES):
-        log(f"[PROXY-SEARCH] Mengunduh sumber proxy [{idx}]...")
-        proxies_raw = []
-        try:
-            req = requests.get(source_url, timeout=10, headers=get_headers())
-            if req.status_code == 200:
-                lines = req.text.strip().split('\n')
-                proxies_raw = [p.strip() for p in lines if p.strip()]
-                if not proxies_raw:
-                    log(f"[WARN] Sumber [{idx}] berhasil diunduh tapi kosong, mencoba sumber berikutnya...")
-                    continue
-                else:
-                    log(f"[PROXY-SEARCH] Memperoleh {len(proxies_raw)} proxy dari sumber [{idx}].")
-            else:
-                log(f"[WARN] Sumber [{idx}] HTTP {req.status_code}, mencoba sumber berikutnya...")
-                continue
-        except Exception as e:
-            log(f"[WARN] Sumber [{idx}] gagal diunduh: {e}. Mencoba sumber berikutnya...")
-            continue
-            
-        proxies_clean = []
-        for raw in proxies_raw:
-            normalized = normalize_proxy(raw)
-            if normalized:
-                proxies_clean.append(normalized)
-                
-        if not proxies_clean:
-            log(f"[WARN] Tidak ada proxy valid di sumber [{idx}] setelah normalisasi.")
-            continue
-            
-        log(f"[PROXY-SEARCH] {len(proxies_clean)} proxy valid di sumber [{idx}]. Memulai pengecekan paralel (Batch: 50)...")
-        
-        found_proxy = None
-        stop_event = threading.Event()
-        
-        def check_proxy(px):
-            if stop_event.is_set():
-                return None
-                
-            px_url = f"http://{px}"
-            proxies_dict = {"http": px_url, "https": px_url}
-            
-            # ── TES 1: Endpoint stats (cek konektivitas dasar) ──
-            try:
-                res = requests.get(target_stats, proxies=proxies_dict, timeout=5, verify=False)
-                if res.status_code not in (200, 401):
-                    if not stop_event.is_set():
-                        log(f"[PROXY-FAIL] [GAGAL] Proxy: {px} | Stats HTTP {res.status_code}")
-                    return None
-            except requests.exceptions.Timeout:
-                if not stop_event.is_set():
-                    log(f"[PROXY-FAIL] [GAGAL] Proxy: {px} | Timeout saat tes stats")
-                return None
-            except requests.exceptions.RequestException as e:
-                if not stop_event.is_set():
-                    log(f"[PROXY-FAIL] [GAGAL] Proxy: {px} | {type(e).__name__} saat tes stats")
-                return None
-                
-            if stop_event.is_set():
-                return None
-                
-            # ── TES 2: Ping stream URL (mirip apa yang akan dilakukan ffmpeg) ──
-            try:
-                ping = requests.get(target_stream, proxies=proxies_dict, stream=True, timeout=6, verify=False)
-                ping.close()
-                if ping.status_code in (200, 206, 401):
-                    if not stop_event.is_set():
-                        stop_event.set()
-                        log(f"[PROXY-OK] [BERHASIL] Proxy: {px} | Stats OK, Stream: HTTP {ping.status_code}")
-                        return px
-                else:
-                    if not stop_event.is_set():
-                        log(f"[PROXY-FAIL] [GAGAL] Proxy: {px} | Stream HTTP {ping.status_code} (bukan 200/401)")
-            except requests.exceptions.Timeout:
-                if not stop_event.is_set():
-                    log(f"[PROXY-FAIL] [GAGAL] Proxy: {px} | Timeout saat tes stream ping")
-            except requests.exceptions.RequestException as e:
-                if not stop_event.is_set():
-                    log(f"[PROXY-FAIL] [GAGAL] Proxy: {px} | {type(e).__name__} saat tes stream ping")
-                    
+    proxies_clean = []
+    for raw in proxies_raw:
+        normalized = normalize_proxy(raw)
+        if normalized:
+            proxies_clean.append(normalized)
+
+    if not proxies_clean:
+        log("[PROXY-FAIL] Tidak ada proxy valid setelah normalisasi.")
+        return None
+
+    log(f"[PROXY-SEARCH] {len(proxies_clean)} proxy valid. Memulai pengecekan paralel (Batch: 50)...")
+
+    found_proxy = None
+    stop_event = threading.Event()
+
+    def check_proxy(px):
+        if stop_event.is_set():
             return None
 
-        executor = concurrent.futures.ThreadPoolExecutor(max_workers=50)
-        futures = [executor.submit(check_proxy, p) for p in proxies_clean]
-        
-        for future in concurrent.futures.as_completed(futures):
-            res = future.result()
-            if res:
-                found_proxy = res
-                stop_event.set()
-                try:
-                    executor.shutdown(wait=False, cancel_futures=True)
-                except TypeError:
-                    executor.shutdown(wait=False)
-                break
-                
-        if found_proxy:
-            log(f"[PROXY-OK] Selesai. Proxy terpilih dari sumber [{idx}]: {found_proxy}")
-            return found_proxy
-        else:
-            log(f"[WARN] Tidak ada proxy merespons 200 OK dari sumber [{idx}].")
+        # px sudah dalam format "ip:port" (bersih, tanpa prefix)
+        px_url = f"http://{px}"
+        proxies_dict = {"http": px_url, "https": px_url}
+
+        # ── TES 1: Endpoint stats (cek konektivitas dasar) ──
+        try:
+            res = requests.get(
+                target_stats,
+                proxies=proxies_dict,
+                timeout=5,
+                verify=False
+            )
+            if res.status_code not in (200, 401):
+                if not stop_event.is_set():
+                    log(f"[PROXY-FAIL] [GAGAL] Proxy: {px} | Stats HTTP {res.status_code}")
+                return None
+        except requests.exceptions.Timeout:
+            if not stop_event.is_set():
+                log(f"[PROXY-FAIL] [GAGAL] Proxy: {px} | Timeout saat tes stats")
+            return None
+        except requests.exceptions.RequestException as e:
+            if not stop_event.is_set():
+                log(f"[PROXY-FAIL] [GAGAL] Proxy: {px} | {type(e).__name__} saat tes stats")
+            return None
+
+        if stop_event.is_set():
+            return None
+
+        # ── TES 2: Ping stream URL (mirip apa yang akan dilakukan ffmpeg) ──
+        try:
+            ping = requests.get(
+                target_stream,
+                proxies=proxies_dict,
+                stream=True,
+                timeout=6,
+                verify=False
+            )
+            ping.close()
+
+            if ping.status_code in (200, 206, 401):
+                if not stop_event.is_set():
+                    stop_event.set()
+                    log(f"[PROXY-OK] [BERHASIL] Proxy: {px} | Stats OK, Stream: HTTP {ping.status_code}")
+                    return px
+            else:
+                if not stop_event.is_set():
+                    log(f"[PROXY-FAIL] [GAGAL] Proxy: {px} | Stream HTTP {ping.status_code} (bukan 200/401)")
+        except requests.exceptions.Timeout:
+            if not stop_event.is_set():
+                log(f"[PROXY-FAIL] [GAGAL] Proxy: {px} | Timeout saat tes stream ping")
+        except requests.exceptions.RequestException as e:
+            if not stop_event.is_set():
+                log(f"[PROXY-FAIL] [GAGAL] Proxy: {px} | {type(e).__name__} saat tes stream ping")
+
+        return None
+
+    executor = concurrent.futures.ThreadPoolExecutor(max_workers=50)
+    futures = [executor.submit(check_proxy, p) for p in proxies_clean]
+
+    for future in concurrent.futures.as_completed(futures):
+        res = future.result()
+        if res:
+            found_proxy = res
+            stop_event.set()
             try:
                 executor.shutdown(wait=False, cancel_futures=True)
-            except:
+            except TypeError:
                 executor.shutdown(wait=False)
+            break
 
-    log("[PROXY-FAIL] Semua sumber proxy telah diperiksa, tidak ada yang bekerja.")
-    return None
+    if found_proxy:
+        log(f"[PROXY-OK] Selesai. Proxy terpilih: {found_proxy}")
+    else:
+        log("[PROXY-FAIL] Tidak ada proxy yang merespons 200 OK.")
+        try:
+            executor.shutdown(wait=False, cancel_futures=True)
+        except:
+            executor.shutdown(wait=False)
+
+    return found_proxy
 
 
 # =============================================
