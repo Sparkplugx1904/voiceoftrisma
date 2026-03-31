@@ -247,10 +247,23 @@ class InteractiveConsole:
                     # Karakter biasa — mulai typing mode
                     if not self._typing.is_set():
                         self._typing.set()
+                    self._last_typing_time = time.time()
                     buf += ch
                     sys.stdout.write(ch)
                     sys.stdout.flush()
                 else:
+                    # Auto-clear typing mode jika sudah 10 detik tidak ada input
+                    if self._typing.is_set() and (time.time() - self._last_typing_time > 10):
+                        self._typing.clear()
+                        # Jika ada buffer, flush agar user tidak bingung
+                        if not self._buffer.empty():
+                            sys.stdout.write("\r" + " " * (len(buf) + 2) + "\r")
+                            sys.stdout.flush()
+                            self.flush()
+                            # Tampilkan kembali buffer ketikan (jika ada) agar user bisa lanjut
+                            if buf:
+                                sys.stdout.write(buf)
+                                sys.stdout.flush()
                     time.sleep(0.05)
             except Exception:
                 time.sleep(0.1)
@@ -480,7 +493,6 @@ def print_help_banner():
   {ERR_COLOR}/skip-stage{RESET}                Skip tahap yang sedang berjalan
 """
     print(banner, flush=True)
-
 
 # =============================================
 # EARLY VALIDATION (sebelum argparse)
@@ -829,6 +841,7 @@ def wait_for_stream(url):
     last_interval = None
     last_err = None
     last_seen_hour = now_wita().hour
+    ping_count = 0
 
     target_stats = "http://i.klikhost.com:8502/stats?json=1"
     log(f"[WAIT] Menunggu siaran — request ke stats: {target_stats}")
@@ -858,7 +871,11 @@ def wait_for_stream(url):
             log(f"[WAIT] Tahap berubah → +{mm}m {ss:02d}s — interval ping: {interval}s ({stage_labels.get(interval, '?')})")
             last_interval = interval
 
+        ping_count += 1
         try:
+            # Subtle heartbeat log setiap ping
+            log_msg = f"[PING] Memeriksa status (Ping #{ping_count})..."
+            
             response = requests.get(
                 target_stats,
                 timeout=5,
@@ -868,7 +885,6 @@ def wait_for_stream(url):
             )
 
             if response.status_code == 200:
-                # Bersihkan spasi untuk memastikan format tertangkap, baik "streamstatus": 1 maupun "streamstatus":1
                 res_clean = response.text.replace(" ", "")
                 if '"streamstatus":1' in res_clean:
                     log(f"[OK] Stream ON-AIR (streamstatus: 1) — memulai perekaman...")
@@ -878,13 +894,18 @@ def wait_for_stream(url):
                     if last_err != "offline":
                         log(f"[OFFLINE] Server merespons tapi siaran OFF-AIR (streamstatus bukan 1) — menunggu...")
                         last_err = "offline"
+                    else:
+                        # Heartbeat singkat jika sudah offline sebelumnya
+                        log(f"[PING] #{ping_count} | Status: OFF-AIR | Interval: {interval}s")
             else:
                 if last_err != f"http_{response.status_code}":
                     log(f"[OFFLINE] Server merespons HTTP {response.status_code} — menunggu...")
                     last_err = f"http_{response.status_code}"
+                else:
+                    log(f"[PING] #{ping_count} | Status: HTTP {response.status_code} | Interval: {interval}s")
 
-        except requests.exceptions.RequestException:
-            log("[ERROR] Tidak dapat menjangkau server — kemungkinan proxy mati atau server down.")
+        except requests.exceptions.RequestException as e:
+            log(f"[ERROR] #{ping_count} | Gagal menjangkau server: {type(e).__name__}")
             last_err = None
 
         time.sleep(interval)
