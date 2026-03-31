@@ -38,13 +38,13 @@ TAG_WIDTH = 15
 # =============================================
 # True Color ANSI (24-bit RGB)
 # =============================================
-TIME_COLOR = "\033[38;2;139;148;158m"   # #8b949e — abu-abu kebiruan (timestamp)
-INFO_COLOR = "\033[38;2;88;166;255m"    # #58a6ff — biru (info/sukses)
-WARN_COLOR = "\033[38;2;210;153;34m"    # #d29922 — kuning/oranye (peringatan)
-ERR_COLOR  = "\033[38;2;248;81;73m"     # #f85149 — merah (error)
-UP_COLOR   = "\033[38;2;179;137;245m"   # #b389f5 — ungu (upload/merge)
-TEXT_COLOR = "\033[38;2;201;209;217m"    # #c9d1d9 — abu-abu terang (teks utama)
-RESET      = "\033[0m"
+TIME_COLOR = ""
+INFO_COLOR = ""
+WARN_COLOR = ""
+ERR_COLOR  = ""
+UP_COLOR   = ""
+TEXT_COLOR = ""
+RESET      = ""
 
 TAG_COLORS = {
     # Red — error / berhenti paksa
@@ -423,8 +423,8 @@ def log(msg):
 # =============================================
 def print_help_banner():
     """Tampilkan banner help dengan semua args yang tersedia"""
-    BOLD = "\033[1m"
-    DIM  = "\033[2m"
+    BOLD = ""
+    DIM  = ""
 
     banner = f"""
 {INFO_COLOR}╔══════════════════════════════════════════════════════════════════╗
