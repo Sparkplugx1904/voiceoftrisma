@@ -549,8 +549,8 @@ def find_working_proxy():
     Setiap proxy divalidasi dua kali: tes stats endpoint + tes stream ping.
     Berhenti pada proxy pertama yang lulus kedua tes.
     """
-    target_stats = "http://i.klikhost.com:8502/stats?json=1"
-    target_stream = "http://i.klikhost.com:8502/stream"
+    target_stats = "http://i.klikhost.com:8044/stats?json=1"
+    target_stream = "http://i.klikhost.com:8044/stream"
 
     log("[PROXY-SEARCH] Mengunduh daftar proxy terbaru dari semua sumber...")
     proxies_raw = []
@@ -718,7 +718,7 @@ def find_working_proxy():
 GIST_TOKEN    = os.environ.get("GIST_TOKEN")
 GIST_ID       = "0d0b5d5e6f1184cadd7da69c74b753c9"
 GIST_FILENAME = "voiceoftrisma-server-status.json"
-GIST_STATS_URL = "https://i.klikhost.com:8502/stats?json=1"
+GIST_STATS_URL = "https://i.klikhost.com:8044/stats?json=1"
 
 def _gist_worker():
     """
@@ -1297,7 +1297,7 @@ def main_recording():
     if ARGS.archive_secret:
         MY_SECRET_KEY = ARGS.archive_secret
 
-    stream_url = ARGS.stream_url if ARGS.stream_url else "http://i.klikhost.com:8502/stream"
+    stream_url = ARGS.stream_url if ARGS.stream_url else "http://i.klikhost.com:8044/stream"
 
     # Evaluasi Proxy
     global SELECTED_PROXY
