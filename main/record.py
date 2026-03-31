@@ -36,42 +36,15 @@ ARGS = None
 TAG_WIDTH = 15
 
 # =============================================
-# ANSI Color — True Color (24-bit) untuk terminal lokal,
-# fallback ke ANSI 8-color standar di GitHub Actions / CI.
-# GitHub Actions tidak mendukung 24-bit color, sehingga
-# sequence \033[38;2;R;G;Bm tampil sebagai teks literal.
-# Deteksi: env var GITHUB_ACTIONS=true atau NO_COLOR=1
+# True Color ANSI (24-bit RGB)
 # =============================================
-_IN_CI    = os.environ.get("GITHUB_ACTIONS", "").lower() == "true"
-_NO_COLOR = os.environ.get("NO_COLOR", "") != ""
-
-if _NO_COLOR:
-    # Matikan semua warna (misal: output diredirect ke file)
-    TIME_COLOR = ""
-    INFO_COLOR = ""
-    WARN_COLOR = ""
-    ERR_COLOR  = ""
-    UP_COLOR   = ""
-    TEXT_COLOR = ""
-    RESET      = ""
-elif _IN_CI:
-    # ANSI 8-color standar — didukung GitHub Actions
-    TIME_COLOR = "\033[90m"   # bright black / dark gray  (timestamp)
-    INFO_COLOR = "\033[94m"   # bright blue               (info/sukses)
-    WARN_COLOR = "\033[93m"   # bright yellow             (peringatan)
-    ERR_COLOR  = "\033[91m"   # bright red                (error)
-    UP_COLOR   = "\033[95m"   # bright magenta            (upload/merge)
-    TEXT_COLOR = "\033[97m"   # bright white              (teks utama)
-    RESET      = "\033[0m"
-else:
-    # True Color 24-bit — untuk terminal lokal yang mendukung
-    TIME_COLOR = "\033[38;2;139;148;158m"   # #8b949e — abu-abu kebiruan (timestamp)
-    INFO_COLOR = "\033[38;2;88;166;255m"    # #58a6ff — biru (info/sukses)
-    WARN_COLOR = "\033[38;2;210;153;34m"    # #d29922 — kuning/oranye (peringatan)
-    ERR_COLOR  = "\033[38;2;248;81;73m"     # #f85149 — merah (error)
-    UP_COLOR   = "\033[38;2;179;137;245m"   # #b389f5 — ungu (upload/merge)
-    TEXT_COLOR = "\033[38;2;201;209;217m"   # #c9d1d9 — abu-abu terang (teks utama)
-    RESET      = "\033[0m"
+TIME_COLOR = "\033[38;2;139;148;158m"   # #8b949e — abu-abu kebiruan (timestamp)
+INFO_COLOR = "\033[38;2;88;166;255m"    # #58a6ff — biru (info/sukses)
+WARN_COLOR = "\033[38;2;210;153;34m"    # #d29922 — kuning/oranye (peringatan)
+ERR_COLOR  = "\033[38;2;248;81;73m"     # #f85149 — merah (error)
+UP_COLOR   = "\033[38;2;179;137;245m"   # #b389f5 — ungu (upload/merge)
+TEXT_COLOR = "\033[38;2;201;209;217m"    # #c9d1d9 — abu-abu terang (teks utama)
+RESET      = "\033[0m"
 
 TAG_COLORS = {
     # Red — error / berhenti paksa
@@ -535,30 +508,15 @@ SELECTED_PROXY = None
 
 # =============================================
 # PROXY SOURCE LIST
-# Diambil dari GitHub Secrets via environment variable HTTP_PROXY.
-# Nilai HTTP_PROXY harus berupa JSON array string, contoh:
-#   ["https://url1.txt", "https://url2.txt", ...]
-# Semua URL dalam daftar akan digunakan sekaligus (bukan hanya satu).
+# Urutan: index 0 = utama, index 1+ = cadangan
+# Selalu dimulai dari index 0 terlebih dahulu,
+# lanjut ke index berikutnya hanya jika gagal.
+# Tambah cadangan baru cukup append ke array ini.
 # =============================================
-def _load_proxy_sources():
-    raw = os.environ.get("HTTP_PROXY", "").strip()
-    if not raw:
-        log("[WARN] Environment variable HTTP_PROXY tidak ditemukan atau kosong. "
-            "Proxy source list akan kosong.")
-        return []
-    try:
-        sources = json.loads(raw)
-        if not isinstance(sources, list):
-            log("[WARN] HTTP_PROXY bukan JSON array yang valid. Proxy source list akan kosong.")
-            return []
-        sources = [s for s in sources if isinstance(s, str) and s.strip()]
-        log(f"[ENV] HTTP_PROXY dimuat: {len(sources)} sumber proxy ditemukan.")
-        return sources
-    except json.JSONDecodeError as e:
-        log(f"[WARN] Gagal parse HTTP_PROXY sebagai JSON: {e}. Proxy source list akan kosong.")
-        return []
-
-PROXY_SOURCES = _load_proxy_sources()
+PROXY_SOURCES = [
+    "https://raw.githubusercontent.com/proxifly/free-proxy-list/refs/heads/main/proxies/protocols/http/data.txt",
+    "https://raw.githubusercontent.com/TheSpeedX/PROXY-List/refs/heads/master/http.txt",
+]
 
 def get_proxies_dict(proxy_url):
     """Kembalikan dict proxy untuk library requests.
@@ -579,32 +537,27 @@ def find_working_proxy():
     target_stats = "http://i.klikhost.com:8502/stats?json=1"
     target_stream = "http://i.klikhost.com:8502/stream"
 
-    log("[PROXY-SEARCH] Mengunduh daftar proxy terbaru dari semua sumber...")
+    log("[PROXY-SEARCH] Mengunduh daftar proxy terbaru...")
     proxies_raw = []
 
-    if not PROXY_SOURCES:
-        log("[PROXY-FAIL] PROXY_SOURCES kosong. Pastikan HTTP_PROXY sudah diset di GitHub Secrets.")
-        return None
-
-    # Iterasi SEMUA PROXY_SOURCES dan gabungkan seluruh hasilnya
+    # Iterasi PROXY_SOURCES secara berurutan mulai index 0
     for idx, source_url in enumerate(PROXY_SOURCES):
         try:
-            log(f"[PROXY-SEARCH] Mengunduh sumber [{idx}]: {source_url}")
+            log(f"[PROXY-SEARCH] Mencoba sumber [{idx}]")
             req = requests.get(source_url, timeout=10, headers=get_headers())
             if req.status_code == 200:
                 lines = req.text.strip().split('\n')
                 raw_list = [p.strip() for p in lines if p.strip()]
                 if raw_list:
-                    log(f"[PROXY-SEARCH] Sumber [{idx}]: {len(raw_list)} proxy ditemukan, digabung ke pool.")
-                    proxies_raw.extend(raw_list)
+                    log(f"[PROXY-SEARCH] Berhasil mengambil {len(raw_list)} proxy dari sumber [{idx}]")
+                    proxies_raw = raw_list
+                    break
                 else:
-                    log(f"[WARN] Sumber [{idx}] berhasil diunduh tapi daftar kosong.")
+                    log(f"[WARN] Sumber [{idx}] berhasil diunduh tapi daftar kosong, mencoba cadangan...")
             else:
-                log(f"[WARN] Sumber [{idx}] merespons HTTP {req.status_code}, dilewati.")
+                log(f"[WARN] Sumber [{idx}] merespons HTTP {req.status_code}, mencoba cadangan...")
         except Exception as e:
-            log(f"[WARN] Sumber [{idx}] gagal: {e}, dilewati.")
-
-    log(f"[PROXY-SEARCH] Total proxy mentah dari semua sumber: {len(proxies_raw)} entri.")
+            log(f"[WARN] Sumber [{idx}] gagal: {e}, mencoba cadangan...")
 
     if not proxies_raw:
         log("[PROXY-FAIL] Semua sumber proxy gagal diambil.")
