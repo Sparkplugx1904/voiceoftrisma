@@ -2,3 +2,5 @@ requests
 internetarchive
 requests[socks]
 brotli
+python-dotenv
+dotenv
