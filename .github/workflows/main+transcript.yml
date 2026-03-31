@@ -47,6 +47,7 @@ jobs:
           CDN_PROXY: ${{ secrets.CDN_PROXY }}
           GH_PROXY: ${{ secrets.GH_PROXY }}
           GIST_TOKEN: ${{ secrets.GIST_TOKEN }}
+          HTTP_PROXY: ${{ secrets.HTTP_PROXY }}
 
         run: |
           mkdir -p recordings
