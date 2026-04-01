@@ -868,11 +868,18 @@ def wait_for_stream(url):
                     else:
                         log(f"[PING] #{ping_count} | Status: OFF-AIR | Interval: {interval}s")
             else:
-                if last_err != f"http_{response.status_code}":
-                    log(f"[OFFLINE] Server merespons HTTP {response.status_code} — menunggu...")
-                    last_err = f"http_{response.status_code}"
+                # Non-200: proxy tidak bisa meneruskan request ke server radio dengan benar
+                # → ganti proxy jika pakai --random-proxy
+                if ARGS and getattr(ARGS, 'random_proxy', False) and SELECTED_PROXY:
+                    log(f"[PROXY-FAIL] #{ping_count} | Proxy {SELECTED_PROXY} merespons HTTP {response.status_code} — ganti proxy...")
+                    next_proxy_from_pool()
+                    last_err = None
                 else:
-                    log(f"[PING] #{ping_count} | Status: HTTP {response.status_code} | Interval: {interval}s")
+                    if last_err != f"http_{response.status_code}":
+                        log(f"[OFFLINE] Server merespons HTTP {response.status_code} — menunggu...")
+                        last_err = f"http_{response.status_code}"
+                    else:
+                        log(f"[PING] #{ping_count} | Status: HTTP {response.status_code} | Interval: {interval}s")
 
         except requests.exceptions.ProxyError as e:
             log(f"[PROXY-FAIL] #{ping_count} | Proxy {SELECTED_PROXY} tidak dapat digunakan: {type(e).__name__}")
