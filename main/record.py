@@ -712,109 +712,6 @@ def find_working_proxy():
     return found_proxy
 
 
-# =============================================
-# GIST AUTO-PUBLISH (non-blocking, parallel)
-# =============================================
-GIST_TOKEN    = os.environ.get("GIST_TOKEN")
-GIST_ID       = "0d0b5d5e6f1184cadd7da69c74b753c9"
-GIST_FILENAME = "voiceoftrisma-server-status.json"
-GIST_STATS_URL = "http://i.klikhost.com:8502/stats?json=1"
-LAST_GIST_PUSH_TIME = 0
-
-def _gist_worker(radio_data=None):
-    """
-    Worker yang berjalan di daemon thread terpisah.
-    Jika radio_data diberikan, data tersebut langsung didesinfeksi lalu didorong ke Gist.
-    Jika tidak ada, worker mencoba mengambil sendiri (fallback).
-    """
-    if not GIST_TOKEN:
-        return
-
-    # Jika data tidak diberikan, ambil manual (fallback)
-    if not radio_data:
-        try:
-            resp = requests.get(
-                GIST_STATS_URL,
-                headers=get_headers(),
-                timeout=10,
-                verify=False,
-                proxies=get_proxies_dict(SELECTED_PROXY)
-            )
-            resp.raise_for_status()
-            radio_data = resp.json()
-        except Exception as e:
-            log(f"[WARN] Gist worker: gagal ambil stats — {e}. Menggunakan fallback offline.")
-            radio_data = {
-                "status": "offline",
-                "message": "Server radio tidak dapat dijangkau saat ini.",
-                "last_error": str(e)
-            }
-    else:
-        # Data diberikan dari polling loop — tidak perlu fetch lagi!
-        pass
-
-    try:
-        api_url = f"https://api.github.com/gists/{GIST_ID}"
-        gist_headers = {
-            "Authorization": f"token {GIST_TOKEN}",
-            "Accept": "application/vnd.github.v3+json",
-        }
-        payload = {
-            "files": {
-                GIST_FILENAME: {
-                    "content": json.dumps(radio_data, indent=2)
-                }
-            }
-        }
-        # Memastikan publish Gist tidak akan pernah menggunakan proxy demi keamanan token
-        patch_res = requests.patch(
-            api_url, 
-            headers=gist_headers, 
-            json=payload, 
-            timeout=10, 
-            proxies={"http": None, "https": None}
-        )
-
-        if patch_res.status_code == 200:
-            gist_raw_url = f"https://gist.githubusercontent.com/Sparkplugx1904/{GIST_ID}/raw/{GIST_FILENAME}"
-            log(f"[OK] Gist worker: GitHub Gist berhasil diperbarui → {gist_raw_url}")
-        else:
-            log(f"[WARN] Gist worker: GitHub menolak request. HTTP {patch_res.status_code}")
-    except Exception as e:
-        log(f"[WARN] Gist worker: koneksi ke GitHub gagal — {e}")
-
-
-def push_gist_background(radio_data=None, force=False):
-    """
-    Luncurkan _gist_worker() di background thread.
-    Throttling: Hanya izinkan update Gist sekali dalam 15 detik kecuali force=True.
-    """
-    global LAST_GIST_PUSH_TIME
-    now = time.time()
-    
-    if not force and (now - LAST_GIST_PUSH_TIME < 15):
-        # Terlalu cepat, abaikan agar tidak kena rate limit GitHub
-        return None
-
-    LAST_GIST_PUSH_TIME = now
-    t = threading.Thread(
-        target=_gist_worker, 
-        args=(radio_data,),
-        daemon=True, 
-        name="gist-publisher"
-    )
-    t.start()
-    return t
-
-def publish_gist_offline_force():
-    """Memaksa publish ke Gist dengan status offline dan streamstatus: 0."""
-    log("[PING] Memaksa update Gist ke status offline...")
-    radio_data = {
-        "status": "offline",
-        "message": "Perekaman selesai atau dihentikan.",
-        "streamstatus": 0
-    }
-    push_gist_background(radio_data, force=True)
 
 # =============================================
 # WAIT FOR STREAM
@@ -910,24 +807,15 @@ def wait_for_stream(url):
             if response.status_code == 200:
                 res_clean = response.text.replace(" ", "")
                 if '"streamstatus":1' in res_clean:
-                    # 1. String ditemukan! Publish ke Gist SEKALI saja.
-                    radio_json = response.json()
-                    push_gist_background(radio_json)
-                    
-                    # 2. Lanjut ke perekaman (keluar dari loop wait)
-                    log(f"[OK] Stream ON-AIR — Gist diperbarui, memulai perekaman...")
+                    log(f"[OK] Stream ON-AIR — memulai perekaman...")
                     return
                 else:
-                    # Jika tidak ada "streamstatus":1, ulangi publish dengan fallback offline
-                    push_gist_background(None)
                     if last_err != "offline":
                         log(f"[OFFLINE] Server merespons tapi siaran OFF-AIR — menunggu...")
                         last_err = "offline"
                     else:
                         log(f"[PING] #{ping_count} | Status: OFF-AIR | Interval: {interval}s")
             else:
-                # Ulangi publish jika error HTTP
-                push_gist_background(None)
                 if last_err != f"http_{response.status_code}":
                     log(f"[OFFLINE] Server merespons HTTP {response.status_code} — menunggu...")
                     last_err = f"http_{response.status_code}"
@@ -935,8 +823,6 @@ def wait_for_stream(url):
                     log(f"[PING] #{ping_count} | Status: HTTP {response.status_code} | Interval: {interval}s")
 
         except requests.exceptions.RequestException as e:
-            # Ulangi publish jika gagal menjangkau server
-            push_gist_background(None)
             log(f"[ERROR] #{ping_count} | Gagal menjangkau server: {type(e).__name__}")
             last_err = None
 
@@ -1439,7 +1325,6 @@ if __name__ == "__main__":
             log("[RESTART] Restarting recording loop (no timer limit)...")
             continue
 
-    publish_gist_offline_force()
     # Beri sedikit waktu agar background thread selesai sebelum program benar-benar mati
     time.sleep(2) 
     log("[END] Program selesai.")
