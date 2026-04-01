@@ -41,7 +41,13 @@ TAG_WIDTH = 15
 # True Color ANSI (24-bit RGB)
 # Dinonaktifkan jika stdout bukan TTY (misal GitHub Actions)
 # =============================================
-_USE_COLOR = sys.stdout.isatty()
+# isatty() = False di GitHub Actions (stdout adalah pipe), tapi GitHub Actions
+# tetap support ANSI color. Aktifkan juga jika GITHUB_ACTIONS atau FORCE_COLOR di-set.
+_USE_COLOR = (
+    sys.stdout.isatty()
+    or bool(os.environ.get("GITHUB_ACTIONS"))
+    or bool(os.environ.get("FORCE_COLOR"))
+)
 
 if _USE_COLOR:
     TIME_COLOR = "\033[38;2;139;148;158m"   # #8b949e — abu-abu kebiruan (timestamp)
@@ -773,6 +779,7 @@ def wait_for_stream(url):
     Mirip fetch() no-cors — koneksi dibuka, header diterima, langsung ditutup.
     Kalau server merespons tanpa error = stream hidup, langsung mulai rekam.
     """
+    global SELECTED_PROXY
     STAGES = [
         (   0,  120,   3),
         ( 120,  180,   5),
