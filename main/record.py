@@ -39,14 +39,21 @@ TAG_WIDTH = 15
 
 # =============================================
 # True Color ANSI (24-bit RGB)
+# Dinonaktifkan jika stdout bukan TTY (misal GitHub Actions)
 # =============================================
-TIME_COLOR = "\033[38;2;139;148;158m"   # #8b949e — abu-abu kebiruan (timestamp)
-INFO_COLOR = "\033[38;2;88;166;255m"    # #58a6ff — biru (info/sukses)
-WARN_COLOR = "\033[38;2;210;153;34m"    # #d29922 — kuning/oranye (peringatan)
-ERR_COLOR  = "\033[38;2;248;81;73m"     # #f85149 — merah (error)
-UP_COLOR   = "\033[38;2;179;137;245m"   # #b389f5 — ungu (upload/merge)
-TEXT_COLOR = "\033[38;2;201;209;217m"    # #c9d1d9 — abu-abu terang (teks utama)
-RESET      = "\033[0m"
+_USE_COLOR = sys.stdout.isatty()
+
+if _USE_COLOR:
+    TIME_COLOR = "\033[38;2;139;148;158m"   # #8b949e — abu-abu kebiruan (timestamp)
+    INFO_COLOR = "\033[38;2;88;166;255m"    # #58a6ff — biru (info/sukses)
+    WARN_COLOR = "\033[38;2;210;153;34m"    # #d29922 — kuning/oranye (peringatan)
+    ERR_COLOR  = "\033[38;2;248;81;73m"     # #f85149 — merah (error)
+    UP_COLOR   = "\033[38;2;179;137;245m"   # #b389f5 — ungu (upload/merge)
+    TEXT_COLOR = "\033[38;2;201;209;217m"   # #c9d1d9 — abu-abu terang (teks utama)
+    RESET      = "\033[0m"
+    BOLD       = "\033[1m"
+else:
+    TIME_COLOR = INFO_COLOR = WARN_COLOR = ERR_COLOR = UP_COLOR = TEXT_COLOR = RESET = BOLD = ""
 
 TAG_COLORS = {
     # Red — error / berhenti paksa
@@ -438,8 +445,7 @@ def log(msg):
 # =============================================
 def print_help_banner():
     """Tampilkan banner help dengan semua args yang tersedia"""
-    BOLD = "\033[1m"
-    DIM  = "\033[2m"
+    DIM  = "\033[2m" if _USE_COLOR else ""
 
     banner = f"""
 {INFO_COLOR}╔══════════════════════════════════════════════════════════════════╗
@@ -520,6 +526,31 @@ def now_wita():
 # =============================================
 SELECTED_PROXY = None
 
+# Pool lengkap semua proxy yang sudah dinormalisasi — diisi saat find_working_proxy() pertama kali dipanggil.
+# wait_for_stream() akan iterasi dari sini tanpa perlu re-download.
+PROXY_POOL       = []   # list of "ip:port"
+PROXY_POOL_INDEX = 0    # index proxy yang sedang aktif
+
+
+def next_proxy_from_pool():
+    """
+    Geser SELECTED_PROXY ke entri berikutnya di PROXY_POOL.
+    Jika pool habis, set SELECTED_PROXY = None (koneksi langsung).
+    Return proxy baru (atau None jika pool habis).
+    """
+    global SELECTED_PROXY, PROXY_POOL_INDEX
+    if not PROXY_POOL:
+        SELECTED_PROXY = None
+        return None
+    PROXY_POOL_INDEX += 1
+    if PROXY_POOL_INDEX >= len(PROXY_POOL):
+        log("[PROXY-FAIL] Semua proxy dalam pool sudah dicoba. Fallback ke koneksi langsung.")
+        SELECTED_PROXY = None
+        return None
+    SELECTED_PROXY = PROXY_POOL[PROXY_POOL_INDEX]
+    log(f"[PROXY-OK] Beralih ke proxy berikutnya [{PROXY_POOL_INDEX}/{len(PROXY_POOL)-1}]: {SELECTED_PROXY}")
+    return SELECTED_PROXY
+
 # =============================================
 # PROXY SOURCE LIST
 # Diambil dari GitHub Secrets via environment variable HTTP_PROXY.
@@ -560,9 +591,12 @@ def get_proxies_dict(proxy_url):
 def find_working_proxy():
     """
     Mencari proxy secara otomatis dari PROXY_SOURCES array secara berurutan.
-    Setiap proxy divalidasi dua kali: tes stats endpoint + tes stream ping.
-    Berhenti pada proxy pertama yang lulus kedua tes.
+    Setiap proxy divalidasi: tes stats endpoint harus HTTP 200 + mengandung 'streamstatus'.
+    Berhenti pada proxy pertama yang lulus.
+    Seluruh daftar proxy yang sudah dinormalisasi disimpan ke PROXY_POOL global
+    agar wait_for_stream() bisa beralih ke proxy berikutnya tanpa re-download.
     """
+    global PROXY_POOL, PROXY_POOL_INDEX
     target_stats = "http://i.klikhost.com:8502/stats?json=1"
 
     log("[PROXY-SEARCH] Mengunduh daftar proxy terbaru dari semua sumber...")
@@ -634,6 +668,10 @@ def find_working_proxy():
         log("[PROXY-FAIL] Tidak ada proxy valid setelah normalisasi.")
         return None
 
+    # Simpan seluruh pool ke global agar bisa diiterasi nanti tanpa re-download
+    PROXY_POOL = proxies_clean
+    PROXY_POOL_INDEX = 0
+
     log(f"[PROXY-SEARCH] {len(proxies_clean)} proxy valid. Memulai pengecekan paralel (Batch: 50)...")
 
     found_proxy = None
@@ -684,8 +722,6 @@ def find_working_proxy():
             log(f"[PROXY-OK] [BERHASIL] Proxy: {px} | Stats dapat diakses dan terbaca utuh")
             return px
 
-        return None
-
     executor = concurrent.futures.ThreadPoolExecutor(max_workers=50)
     futures = [executor.submit(check_proxy, p) for p in proxies_clean]
 
@@ -701,7 +737,10 @@ def find_working_proxy():
             break
 
     if found_proxy:
-        log(f"[PROXY-OK] Selesai. Proxy terpilih: {found_proxy}")
+        # Set index ke posisi proxy terpilih agar next_proxy_from_pool() lanjut dari sini
+        if found_proxy in PROXY_POOL:
+            PROXY_POOL_INDEX = PROXY_POOL.index(found_proxy)
+        log(f"[PROXY-OK] Selesai. Proxy terpilih [{PROXY_POOL_INDEX}/{len(PROXY_POOL)-1}]: {found_proxy}")
     else:
         log("[PROXY-FAIL] Tidak ada proxy yang merespons 200 OK.")
         try:
@@ -793,9 +832,6 @@ def wait_for_stream(url):
 
         ping_count += 1
         try:
-            # Subtle heartbeat log setiap ping
-            log_msg = f"[PING] Memeriksa status (Ping #{ping_count})..."
-            
             response = requests.get(
                 target_stats,
                 timeout=5,
@@ -806,7 +842,16 @@ def wait_for_stream(url):
 
             if response.status_code == 200:
                 res_clean = response.text.replace(" ", "")
-                if '"streamstatus":1' in res_clean:
+
+                # Proxy mengembalikan konten tapi sama sekali tidak ada key "streamstatus"
+                # → proxy ngawur/intercept, ganti proxy
+                if "streamstatus" not in res_clean:
+                    log(f"[PROXY-FAIL] #{ping_count} | Proxy {SELECTED_PROXY} merespons tapi konten tidak valid (tanpa 'streamstatus'). Ganti proxy...")
+                    if ARGS and getattr(ARGS, 'random_proxy', False):
+                        next_proxy_from_pool()
+                    last_err = None
+
+                elif '"streamstatus":1' in res_clean:
                     log(f"[OK] Stream ON-AIR — memulai perekaman...")
                     return
                 else:
@@ -821,6 +866,15 @@ def wait_for_stream(url):
                     last_err = f"http_{response.status_code}"
                 else:
                     log(f"[PING] #{ping_count} | Status: HTTP {response.status_code} | Interval: {interval}s")
+
+        except requests.exceptions.ProxyError as e:
+            log(f"[PROXY-FAIL] #{ping_count} | Proxy {SELECTED_PROXY} tidak dapat digunakan: {type(e).__name__}")
+            if ARGS and getattr(ARGS, 'random_proxy', False):
+                next_proxy_from_pool()
+            else:
+                log("[WARN] Proxy gagal, fallback ke koneksi langsung.")
+                SELECTED_PROXY = None
+            last_err = None
 
         except requests.exceptions.RequestException as e:
             log(f"[ERROR] #{ping_count} | Gagal menjangkau server: {type(e).__name__}")
