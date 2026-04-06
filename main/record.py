@@ -885,6 +885,8 @@ def wait_for_stream(url):
             log(f"[PROXY-FAIL] #{ping_count} | Proxy {SELECTED_PROXY} tidak dapat digunakan: {type(e).__name__}")
             if ARGS and getattr(ARGS, 'random_proxy', False):
                 next_proxy_from_pool()
+                time.sleep(2)  # jeda singkat sebelum retry dengan proxy baru
+                continue       # skip time.sleep(interval) di bawah
             else:
                 log("[WARN] Proxy gagal, fallback ke koneksi langsung.")
                 SELECTED_PROXY = None
@@ -892,6 +894,11 @@ def wait_for_stream(url):
 
         except requests.exceptions.RequestException as e:
             log(f"[ERROR] #{ping_count} | Gagal menjangkau server: {type(e).__name__}")
+            if ARGS and getattr(ARGS, 'random_proxy', False):
+                # Langsung ganti proxy tanpa menunggu interval penuh
+                next_proxy_from_pool()
+                time.sleep(2)  # jeda singkat sebelum retry dengan proxy baru
+                continue       # skip time.sleep(interval) di bawah
             last_err = None
 
         time.sleep(interval)
@@ -1161,6 +1168,16 @@ def run_ffmpeg(url, suffix="", position=0, no_upload=False):
             log("[WARN] Merge gagal, akan upload chunk terakhir sebagai fallback.")
     elif cutoff_reached and no_merge:
         log("[SKIP] --no-merge-chunks aktif. Merge chunk dilewati.")
+
+    # -------------------------------------------------------
+    # Upload hanya saat siaran selesai (cutoff 18:30).
+    # Jika recording putus di tengah jalan (bukan cutoff),
+    # chunk disimpan dulu — akan di-merge & upload saat 18:30.
+    # Pengecualian: --no-timer-limit aktif → upload setiap chunk (perilaku lama).
+    # -------------------------------------------------------
+    if not cutoff_reached and not no_timer:
+        log(f"[SKIP] Chunk tersimpan: {filename_to_upload} — upload ditunda hingga siaran selesai jam 18:30 WITA.")
+        return
 
     log(f"[UPLOAD-PREP] Siap upload: {filename_to_upload}")
 
