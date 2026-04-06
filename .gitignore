@@ -16,3 +16,5 @@ main/.env
 main/ffmpeg
 main/ffprobe
 main/ffplay
+main/mycpp
+main/mycpp/.env
