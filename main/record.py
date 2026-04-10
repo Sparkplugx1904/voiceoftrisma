@@ -538,24 +538,87 @@ PROXY_POOL       = []   # list of "ip:port"
 PROXY_POOL_INDEX = 0    # index proxy yang sedang aktif
 
 
+def search_working_proxy_in_pool(start_idx):
+    """
+    Mencari proxy aktif (200 OK & mengandung 'streamstatus') secara paralel
+    (concurrent) dari PROXY_POOL mulai dari index start_idx.
+    Fungsi ini menghindari spam log saat mencari proxy pengganti.
+    """
+    global PROXY_POOL
+    if not PROXY_POOL or start_idx >= len(PROXY_POOL):
+        return None
+
+    target_stats = "http://i.klikhost.com:8502/stats?json=1"
+    found_proxy = None
+    stop_event = threading.Event()
+
+    def check_proxy(px_info):
+        idx, px = px_info
+        if stop_event.is_set():
+            return None
+
+        px_url = f"http://{px}"
+        proxies_dict = {"http": px_url, "https": px_url}
+        try:
+            res = requests.get(
+                target_stats,
+                proxies=proxies_dict,
+                timeout=5,  # Timeout singkat agar cepat berlalu jika mati
+                verify=False
+            )
+            if res.status_code == 200 and "streamstatus" in res.text:
+                if not stop_event.is_set():
+                    stop_event.set()
+                    return (idx, px)
+        except:
+            pass  # Abaikan semua error secara diam-diam untuk mencegah log spam
+        return None
+
+    # Gunakan sistem chunk (500 proxy per batch) agar tidak membebani RAM
+    chunk_size = 500
+    for chunk_start in range(start_idx, len(PROXY_POOL), chunk_size):
+        chunk_end = min(chunk_start + chunk_size, len(PROXY_POOL))
+        current_chunk = list(enumerate(PROXY_POOL[chunk_start:chunk_end], start=chunk_start))
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=50) as executor:
+            futures = [executor.submit(check_proxy, item) for item in current_chunk]
+            for future in concurrent.futures.as_completed(futures):
+                res = future.result()
+                if res:
+                    found_proxy = res
+                    try:
+                        executor.shutdown(wait=False, cancel_futures=True)
+                    except TypeError:
+                        executor.shutdown(wait=False)
+                    break
+
+        if found_proxy:
+            break
+
+    return found_proxy
+
+
 def next_proxy_from_pool():
     """
-    Geser SELECTED_PROXY ke entri berikutnya di PROXY_POOL.
-    Jika pool habis, set SELECTED_PROXY = None (koneksi langsung).
-    Return proxy baru (atau None jika pool habis).
+    Mencari dan menggeser SELECTED_PROXY ke proxy berikutnya yang *sudah divalidasi*.
     """
-    global SELECTED_PROXY, PROXY_POOL_INDEX
+    global SELECTED_PROXY, PROXY_POOL_INDEX, PROXY_POOL
     if not PROXY_POOL:
         SELECTED_PROXY = None
         return None
-    PROXY_POOL_INDEX += 1
-    if PROXY_POOL_INDEX >= len(PROXY_POOL):
-        log("[PROXY-FAIL] Semua proxy dalam pool sudah dicoba. Fallback ke koneksi langsung.")
+
+    log("[PROXY-SEARCH] Proxy sebelumnya mati. Mencari proxy aktif berikutnya secara paralel...")
+
+    result = search_working_proxy_in_pool(PROXY_POOL_INDEX + 1)
+
+    if result:
+        PROXY_POOL_INDEX, SELECTED_PROXY = result
+        log(f"[PROXY-OK] Berhasil beralih ke proxy [{PROXY_POOL_INDEX}/{len(PROXY_POOL)-1}]: {SELECTED_PROXY}")
+        return SELECTED_PROXY
+    else:
+        log("[PROXY-FAIL] Semua proxy dalam pool sudah dicoba/habis. Fallback ke koneksi langsung.")
         SELECTED_PROXY = None
         return None
-    SELECTED_PROXY = PROXY_POOL[PROXY_POOL_INDEX]
-    log(f"[PROXY-OK] Beralih ke proxy berikutnya [{PROXY_POOL_INDEX}/{len(PROXY_POOL)-1}]: {SELECTED_PROXY}")
-    return SELECTED_PROXY
 
 # =============================================
 # PROXY SOURCE LIST
@@ -674,87 +737,22 @@ def find_working_proxy():
         log("[PROXY-FAIL] Tidak ada proxy valid setelah normalisasi.")
         return None
 
-    # Simpan seluruh pool ke global agar bisa diiterasi nanti tanpa re-download
+    # Simpan seluruh pool ke global
+    global PROXY_POOL, PROXY_POOL_INDEX
     PROXY_POOL = proxies_clean
     PROXY_POOL_INDEX = 0
 
-    log(f"[PROXY-SEARCH] {len(proxies_clean)} proxy valid. Memulai pengecekan paralel (Batch: 50)...")
+    log(f"[PROXY-SEARCH] {len(proxies_clean)} proxy valid. Memulai pencarian proxy aktif...")
 
-    found_proxy = None
-    stop_event = threading.Event()
+    result = search_working_proxy_in_pool(0)
 
-    def check_proxy(px):
-        if stop_event.is_set():
-            return None
-
-        # px sudah dalam format "ip:port" (bersih, tanpa prefix)
-        px_url = f"http://{px}"
-        proxies_dict = {"http": px_url, "https": px_url}
-
-        # ── TES 1: Endpoint stats (Validasi Akses & Isi) ──
-        try:
-            res = requests.get(
-                target_stats,
-                proxies=proxies_dict,
-                timeout=5,
-                verify=False
-            )
-            
-            # 1. Harus bisa diakses (HTTP 200)
-            if res.status_code != 200:
-                if not stop_event.is_set():
-                    log(f"[PROXY-FAIL] [GAGAL] Proxy: {px} | Stats HTTP {res.status_code}")
-                return None
-                
-            # 2 & 3. Bisa dibaca dan mengandung 'streamstatus'
-            res_text = res.text
-            if "streamstatus" not in res_text:
-                if not stop_event.is_set():
-                    log(f"[PROXY-FAIL] [GAGAL] Proxy: {px} | String 'streamstatus' tidak ditemukan")
-                return None
-
-        except requests.exceptions.Timeout:
-            if not stop_event.is_set():
-                log(f"[PROXY-FAIL] [GAGAL] Proxy: {px} | Timeout saat tes stats")
-            return None
-        except requests.exceptions.RequestException as e:
-            if not stop_event.is_set():
-                log(f"[PROXY-FAIL] [GAGAL] Proxy: {px} | {type(e).__name__} saat tes stats")
-            return None
-
-        # Jika lolos Tes 1 dan belum ada proxy lain yang terpilih, maka proxy ini sah!
-        if not stop_event.is_set():
-            stop_event.set()
-            log(f"[PROXY-OK] [BERHASIL] Proxy: {px} | Stats dapat diakses dan terbaca utuh")
-            return px
-
-    executor = concurrent.futures.ThreadPoolExecutor(max_workers=50)
-    futures = [executor.submit(check_proxy, p) for p in proxies_clean]
-
-    for future in concurrent.futures.as_completed(futures):
-        res = future.result()
-        if res:
-            found_proxy = res
-            stop_event.set()
-            try:
-                executor.shutdown(wait=False, cancel_futures=True)
-            except TypeError:
-                executor.shutdown(wait=False)
-            break
-
-    if found_proxy:
-        # Set index ke posisi proxy terpilih agar next_proxy_from_pool() lanjut dari sini
-        if found_proxy in PROXY_POOL:
-            PROXY_POOL_INDEX = PROXY_POOL.index(found_proxy)
+    if result:
+        PROXY_POOL_INDEX, found_proxy = result
         log(f"[PROXY-OK] Selesai. Proxy terpilih [{PROXY_POOL_INDEX}/{len(PROXY_POOL)-1}]: {found_proxy}")
+        return found_proxy
     else:
         log("[PROXY-FAIL] Tidak ada proxy yang merespons 200 OK.")
-        try:
-            executor.shutdown(wait=False, cancel_futures=True)
-        except:
-            executor.shutdown(wait=False)
-
-    return found_proxy
+        return None
 
 
 
