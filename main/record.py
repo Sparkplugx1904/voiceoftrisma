@@ -779,8 +779,8 @@ def wait_for_stream(url):
     """
     global SELECTED_PROXY
     STAGES = [
-        (   0,  120,   3),
-        ( 120,  180,   5),
+        (   0,  120,   5),
+        ( 120,  180,   10),
         ( 180,  300,  15),
         ( 300,  600,  30),
         ( 600, 1800,  60),
@@ -1265,6 +1265,74 @@ def write_env_variables(url, item_id):
 
 
 # =============================================
+# START-TIME HELPER
+# =============================================
+def parse_start_time(value):
+    """
+    Parse string waktu ke objek datetime WITA hari ini.
+    Format yang diterima: hh:mm:ss | hh:mm | hh
+    Kembalikan datetime, atau raise ValueError jika format tidak valid.
+    """
+    parts = value.strip().split(":")
+    if len(parts) == 1:
+        h = int(parts[0])
+        m, s = 0, 0
+    elif len(parts) == 2:
+        h, m = int(parts[0]), int(parts[1])
+        s = 0
+    elif len(parts) == 3:
+        h, m, s = int(parts[0]), int(parts[1]), int(parts[2])
+    else:
+        raise ValueError(f"Format waktu tidak valid: '{value}'. Gunakan hh, hh:mm, atau hh:mm:ss")
+
+    if not (0 <= h <= 23 and 0 <= m <= 59 and 0 <= s <= 59):
+        raise ValueError(f"Nilai waktu di luar rentang valid: '{value}'")
+
+    now = now_wita()
+    return now.replace(hour=h, minute=m, second=s, microsecond=0)
+
+
+def wait_until_start_time(start_dt):
+    """
+    Tunggu hingga waktu start_dt (datetime dengan timezone WITA).
+    Menampilkan countdown setiap 30 detik.
+    Bisa di-skip dengan /skip-stage.
+    """
+    log(f"[WAIT] Menunggu hingga jam {start_dt.strftime('%H:%M:%S')} WITA sebelum mulai...")
+    last_log = None
+
+    while True:
+        # /skip-stage: lewati waiting
+        if CONSOLE and CONSOLE.skip_stage.is_set():
+            CONSOLE.skip_stage.clear()
+            log("[SKIP] Start-time wait dilewati oleh user.")
+            return
+
+        now = now_wita()
+        remaining = (start_dt - now).total_seconds()
+
+        if remaining <= 0:
+            log(f"[OK] Waktu mulai tercapai ({start_dt.strftime('%H:%M:%S')} WITA). Melanjutkan...")
+            return
+
+        # Log countdown setiap 30 detik (atau saat pertama kali)
+        bucket = int(remaining // 30)
+        if bucket != last_log:
+            last_log = bucket
+            mins, secs = divmod(int(remaining), 60)
+            hrs, mins = divmod(mins, 60)
+            if hrs:
+                countdown_str = f"{hrs}j {mins}m {secs:02d}d"
+            elif mins:
+                countdown_str = f"{mins}m {secs:02d}d"
+            else:
+                countdown_str = f"{secs}d"
+            log(f"[WAIT] Menunggu start-time — sisa: {countdown_str} hingga jam {start_dt.strftime('%H:%M:%S')} WITA")
+
+        time.sleep(min(5, remaining))
+
+
+# =============================================
 # MAIN RECORDING
 # =============================================
 def main_recording():
@@ -1299,7 +1367,9 @@ def main_recording():
                         help="Format file stream (mp3, wav, aac, dll) — skip ffprobe")
     parser.add_argument("--duration", type=int, default=None,
                         help="Durasi rekaman dalam detik (misal: 10 = 10 detik)")
-                        
+    parser.add_argument("--start-time", type=str, default=None, dest="start_time",
+                        help="Waktu mulai rekaman WITA. Format: hh | hh:mm | hh:mm:ss (misal: 07, 07:30, 07:30:00)")
+
     parser.add_argument("--proxy", type=str, default=None,
                         help="Gunakan manual HTTP proxy (misal: http://192.168.1.1:8080 atau 192.168.1.1:8080)")
     parser.add_argument("--random-proxy", action="store_true",
@@ -1335,6 +1405,18 @@ def main_recording():
     else:
         SELECTED_PROXY = None
 
+    # --start-time: tunggu hingga waktu yang ditentukan
+    if ARGS.start_time:
+        try:
+            start_dt = parse_start_time(ARGS.start_time)
+            now = now_wita()
+            if start_dt <= now:
+                log(f"[WARN] --start-time {ARGS.start_time} sudah terlewat ({start_dt.strftime('%H:%M:%S')} WITA). Langsung lanjut.")
+            else:
+                wait_until_start_time(start_dt)
+        except ValueError as e:
+            log(f"[ERROR] --start-time: {e}")
+
     if ARGS.skip_check:
         log("[SKIP] Pengecekan stream dilewati, langsung mulai rekam...")
     else:
@@ -1354,6 +1436,7 @@ if __name__ == "__main__":
     pre_parser.add_argument("--no-timer-limit", action="store_true", default=False)
     pre_parser.add_argument("--no-log", action="store_true", default=False)
     pre_parser.add_argument("--hide-banner", action="store_true", default=False)
+    pre_parser.add_argument("--start-time", type=str, default=None, dest="start_time")
     pre_args, _ = pre_parser.parse_known_args()
 
     if not pre_args.hide_banner:
@@ -1367,6 +1450,7 @@ if __name__ == "__main__":
         stream_file_format = None
         output_name = None
         duration = None
+        start_time = pre_args.start_time
         no_save = False
         no_merge_chunks = False
         archive_access = None
