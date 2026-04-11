@@ -899,7 +899,13 @@ def wait_for_stream(url):
                 continue       # skip time.sleep(interval) di bawah
             last_err = None
 
-        time.sleep(interval)
+        # Tidur, tapi jangan melewati pergantian jam (:00).
+        # Kalau interval lebih panjang dari sisa detik ke jam berikutnya,
+        # bangun tepat saat :00 agar reset ke Tahap 1 terjadi on-time.
+        now_dt = now_wita()
+        secs_to_next_hour = 3600 - (now_dt.minute * 60 + now_dt.second)
+        sleep_duration = min(interval, secs_to_next_hour + 1)
+        time.sleep(sleep_duration)
 
 
 # =============================================
