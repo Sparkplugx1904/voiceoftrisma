@@ -105,6 +105,10 @@ TAG_COLORS = {
 
     # Added proxy fail to warning/error based logging
     "[PROXY-FAIL]"  : ERR_COLOR,
+
+    # Teal — warm proxy pool management
+    "[POOL]"        : "\033[38;2;56;189;166m",   # #38bda6
+    "[STATS]"       : "\033[38;2;56;189;166m",
 }
 
 
@@ -537,6 +541,26 @@ SELECTED_PROXY = None
 PROXY_POOL       = []   # list of "ip:port"
 PROXY_POOL_INDEX = 0    # index proxy yang sedang aktif
 
+# =============================================
+# PROXY WARM POOL — 16 proxy siap pakai
+# Diisi secara paralel di latar belakang saat menunggu siaran.
+# Saat stream ON-AIR → pakai ordo-1. Disconnect → ordo-2, dst.
+# Jika pool < 16, warmer thread otomatis refill dari PROXY_POOL.
+# =============================================
+PROXY_WARM_POOL    = []                  # list of validated "ip:port"
+PROXY_WARM_LOCK    = threading.Lock()
+PROXY_WARM_TARGET  = 16
+_proxy_warmer_stop = threading.Event()
+
+# =============================================
+# STATS — Pencatat setiap ping ke stats.json
+# Ditulis secara async via queue agar tidak
+# mem-bottleneck loop ping utama.
+# =============================================
+STATS_FILE         = os.path.join("recordings", "stats.json")
+_stats_queue: "queue.Queue[dict]" = queue.Queue()
+_stats_writer_stop = threading.Event()
+
 
 def search_working_proxy_in_pool(start_idx):
     """
@@ -601,13 +625,25 @@ def search_working_proxy_in_pool(start_idx):
 def next_proxy_from_pool():
     """
     Mencari dan menggeser SELECTED_PROXY ke proxy berikutnya yang *sudah divalidasi*.
+    Prioritas: ambil dari PROXY_WARM_POOL dulu (instant), baru scan dari PROXY_POOL.
     """
     global SELECTED_PROXY, PROXY_POOL_INDEX, PROXY_POOL
+
+    # --- Coba ambil dari warm pool dulu (O(1), tidak perlu scan) ---
+    with PROXY_WARM_LOCK:
+        if PROXY_WARM_POOL:
+            SELECTED_PROXY = PROXY_WARM_POOL.pop(0)
+            remaining = len(PROXY_WARM_POOL)
+            log(f"[POOL] Beralih ke proxy hangat berikutnya: {SELECTED_PROXY} "
+                f"(sisa di warm pool: {remaining}/{PROXY_WARM_TARGET})")
+            return SELECTED_PROXY
+
+    # --- Warm pool kosong: fallback ke scan biasa ---
     if not PROXY_POOL:
         SELECTED_PROXY = None
         return None
 
-    log("[PROXY-SEARCH] Proxy sebelumnya mati. Mencari proxy aktif berikutnya secara paralel...")
+    log("[PROXY-SEARCH] Warm pool kosong. Mencari proxy aktif berikutnya secara paralel...")
 
     result = search_working_proxy_in_pool(PROXY_POOL_INDEX + 1)
 
@@ -619,6 +655,136 @@ def next_proxy_from_pool():
         log("[PROXY-FAIL] Semua proxy dalam pool sudah dicoba/habis. Fallback ke koneksi langsung.")
         SELECTED_PROXY = None
         return None
+
+
+# =============================================
+# PROXY WARMER — background thread
+# =============================================
+def _proxy_warmer_loop():
+    """
+    Background thread: terus mengisi PROXY_WARM_POOL hingga PROXY_WARM_TARGET.
+    Berjalan bersamaan dengan wait_for_stream() sehingga waktu tunggu
+    siaran dimanfaatkan untuk memvalidasi proxy.
+    """
+    global PROXY_POOL_INDEX
+
+    target_stats = "http://i.klikhost.com:8502/stats?json=1"
+    scan_idx = PROXY_POOL_INDEX + 1   # mulai setelah proxy aktif saat ini
+
+    while not _proxy_warmer_stop.is_set():
+        with PROXY_WARM_LOCK:
+            current_size = len(PROXY_WARM_POOL)
+
+        if current_size >= PROXY_WARM_TARGET:
+            # Pool sudah penuh — tidur sebentar lalu cek lagi
+            _proxy_warmer_stop.wait(timeout=10)
+            continue
+
+        needed = PROXY_WARM_TARGET - current_size
+        if not PROXY_POOL or scan_idx >= len(PROXY_POOL):
+            # Pool utama habis — reset scan dari awal
+            scan_idx = 0
+
+        stop_event = threading.Event()
+        found_batch = []
+        found_lock  = threading.Lock()
+
+        def _check(px_info):
+            if stop_event.is_set():
+                return
+            idx, px = px_info
+            px_url = f"http://{px}"
+            try:
+                res = requests.get(
+                    target_stats,
+                    proxies={"http": px_url, "https": px_url},
+                    timeout=5,
+                    verify=False,
+                )
+                if res.status_code == 200 and "streamstatus" in res.text:
+                    with found_lock:
+                        found_batch.append((idx, px))
+                        if len(found_batch) >= needed:
+                            stop_event.set()
+            except Exception:
+                pass
+
+        chunk_end = min(scan_idx + 500, len(PROXY_POOL))
+        chunk = list(enumerate(PROXY_POOL[scan_idx:chunk_end], start=scan_idx))
+        scan_idx = chunk_end
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=50) as ex:
+            futs = [ex.submit(_check, item) for item in chunk]
+            concurrent.futures.wait(futs, timeout=15)
+
+        if found_batch:
+            with PROXY_WARM_LOCK:
+                for _, px in found_batch[:needed]:
+                    if px not in PROXY_WARM_POOL:
+                        PROXY_WARM_POOL.append(px)
+                new_size = len(PROXY_WARM_POOL)
+            log(f"[POOL] Warm pool diisi +{len(found_batch[:needed])} proxy → "
+                f"{new_size}/{PROXY_WARM_TARGET} siap")
+
+        # Jeda singkat antar batch agar tidak membebani CPU
+        if not _proxy_warmer_stop.is_set():
+            _proxy_warmer_stop.wait(timeout=2)
+
+
+def start_proxy_warmer():
+    """Mulai background thread proxy warmer."""
+    _proxy_warmer_stop.clear()
+    t = threading.Thread(target=_proxy_warmer_loop, daemon=True, name="proxy-warmer")
+    t.start()
+    log(f"[POOL] Proxy warmer dimulai — target {PROXY_WARM_TARGET} proxy siap di latar belakang.")
+
+
+def stop_proxy_warmer():
+    """Hentikan proxy warmer thread."""
+    _proxy_warmer_stop.set()
+
+
+# =============================================
+# STATS WRITER — async queue-based
+# =============================================
+def _stats_writer_loop():
+    """
+    Background thread: flush _stats_queue ke STATS_FILE (NDJSON).
+    Tulis dilakukan di luar jalur utama sehingga tidak mem-bottleneck ping.
+    """
+    os.makedirs("recordings", exist_ok=True)
+    while not _stats_writer_stop.is_set() or not _stats_queue.empty():
+        try:
+            entry = _stats_queue.get(timeout=1)
+        except queue.Empty:
+            continue
+        try:
+            with open(STATS_FILE, "a", encoding="utf-8") as f:
+                f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        except Exception as e:
+            pass   # Jangan crash program hanya karena stats gagal tulis
+        finally:
+            _stats_queue.task_done()
+
+
+def start_stats_writer():
+    """Mulai background thread stats writer."""
+    _stats_writer_stop.clear()
+    t = threading.Thread(target=_stats_writer_loop, daemon=True, name="stats-writer")
+    t.start()
+
+
+def stop_stats_writer():
+    """Sinyal stats writer untuk berhenti (setelah queue kosong)."""
+    _stats_writer_stop.set()
+
+
+def append_stat(entry: dict):
+    """
+    Tambahkan satu entri ping ke antrean stats (non-blocking).
+    entry harus berupa dict yang bisa di-serialize ke JSON.
+    """
+    _stats_queue.put_nowait(entry)
 
 # =============================================
 # PROXY SOURCE LIST
@@ -810,11 +976,18 @@ def wait_for_stream(url):
     target_stats = "http://i.klikhost.com:8502/stats?json=1"
     log(f"[WAIT] Menunggu siaran — request ke stats: {target_stats}")
 
+    # Mulai mengumpulkan 16 proxy siap di latar belakang
+    # sambil menunggu siaran — waktu tunggu tidak terbuang sia-sia.
+    use_random_proxy = ARGS and getattr(ARGS, 'random_proxy', False)
+    if use_random_proxy and PROXY_POOL:
+        start_proxy_warmer()
+
     while True:
         # /skip-stage: skip waiting
         if CONSOLE and CONSOLE.skip_stage.is_set():
             CONSOLE.skip_stage.clear()
             log("[SKIP] Wait stage dilewati oleh user.")
+            stop_proxy_warmer()
             return
 
         current_hour = now_wita().hour
@@ -836,6 +1009,18 @@ def wait_for_stream(url):
             last_interval = interval
 
         ping_count += 1
+        ping_time   = now_wita()
+        t_start     = time.monotonic()
+        stat_entry  = {
+            "time"       : ping_time.strftime("%Y-%m-%d %H:%M:%S"),
+            "ping_no"    : ping_count,
+            "proxy"      : SELECTED_PROXY,
+            "status_code": None,
+            "stream_on_air": None,
+            "response_ms": None,
+            "error"      : None,
+        }
+
         try:
             response = requests.get(
                 target_stats,
@@ -844,6 +1029,8 @@ def wait_for_stream(url):
                 headers=get_headers(),
                 proxies=get_proxies_dict(SELECTED_PROXY)
             )
+            stat_entry["response_ms"]  = round((time.monotonic() - t_start) * 1000)
+            stat_entry["status_code"]  = response.status_code
 
             if response.status_code == 200:
                 res_clean = response.text.replace(" ", "")
@@ -851,24 +1038,37 @@ def wait_for_stream(url):
                 # Proxy mengembalikan konten tapi sama sekali tidak ada key "streamstatus"
                 # → proxy ngawur/intercept, ganti proxy
                 if "streamstatus" not in res_clean:
+                    stat_entry["stream_on_air"] = None
+                    stat_entry["error"] = "invalid_content"
                     log(f"[PROXY-FAIL] #{ping_count} | Proxy {SELECTED_PROXY} merespons tapi konten tidak valid (tanpa 'streamstatus'). Ganti proxy...")
-                    if ARGS and getattr(ARGS, 'random_proxy', False):
+                    if use_random_proxy:
                         next_proxy_from_pool()
                     last_err = None
 
                 elif '"streamstatus":1' in res_clean:
+                    stat_entry["stream_on_air"] = True
+                    append_stat(stat_entry)
                     log(f"[OK] Stream ON-AIR — memulai perekaman...")
+                    stop_proxy_warmer()
+                    # Gunakan proxy ordo-1 dari warm pool untuk recording
+                    with PROXY_WARM_LOCK:
+                        if PROXY_WARM_POOL and use_random_proxy:
+                            SELECTED_PROXY = PROXY_WARM_POOL.pop(0)
+                            log(f"[POOL] Proxy ordo-1 dari warm pool dipakai untuk recording: {SELECTED_PROXY} "
+                                f"(sisa warm pool: {len(PROXY_WARM_POOL)})")
                     return
                 else:
+                    stat_entry["stream_on_air"] = False
                     if last_err != "offline":
                         log(f"[OFFLINE] Server merespons tapi siaran OFF-AIR — menunggu...")
                         last_err = "offline"
                     else:
                         log(f"[PING] #{ping_count} | Status: OFF-AIR | Interval: {interval}s")
             else:
+                stat_entry["stream_on_air"] = False
                 # Non-200: proxy tidak bisa meneruskan request ke server radio dengan benar
                 # → ganti proxy jika pakai --random-proxy
-                if ARGS and getattr(ARGS, 'random_proxy', False) and SELECTED_PROXY:
+                if use_random_proxy and SELECTED_PROXY:
                     log(f"[PROXY-FAIL] #{ping_count} | Proxy {SELECTED_PROXY} merespons HTTP {response.status_code} — ganti proxy...")
                     next_proxy_from_pool()
                     last_err = None
@@ -880,9 +1080,12 @@ def wait_for_stream(url):
                         log(f"[PING] #{ping_count} | Status: HTTP {response.status_code} | Interval: {interval}s")
 
         except requests.exceptions.ProxyError as e:
+            stat_entry["error"] = f"ProxyError:{type(e).__name__}"
+            stat_entry["response_ms"] = round((time.monotonic() - t_start) * 1000)
             log(f"[PROXY-FAIL] #{ping_count} | Proxy {SELECTED_PROXY} tidak dapat digunakan: {type(e).__name__}")
-            if ARGS and getattr(ARGS, 'random_proxy', False):
+            if use_random_proxy:
                 next_proxy_from_pool()
+                append_stat(stat_entry)
                 time.sleep(2)  # jeda singkat sebelum retry dengan proxy baru
                 continue       # skip time.sleep(interval) di bawah
             else:
@@ -891,13 +1094,19 @@ def wait_for_stream(url):
             last_err = None
 
         except requests.exceptions.RequestException as e:
+            stat_entry["error"] = f"RequestException:{type(e).__name__}"
+            stat_entry["response_ms"] = round((time.monotonic() - t_start) * 1000)
             log(f"[ERROR] #{ping_count} | Gagal menjangkau server: {type(e).__name__}")
-            if ARGS and getattr(ARGS, 'random_proxy', False):
+            if use_random_proxy:
                 # Langsung ganti proxy tanpa menunggu interval penuh
                 next_proxy_from_pool()
+                append_stat(stat_entry)
                 time.sleep(2)  # jeda singkat sebelum retry dengan proxy baru
                 continue       # skip time.sleep(interval) di bawah
             last_err = None
+
+        # Catat stat secara async (non-blocking)
+        append_stat(stat_entry)
 
         # Tidur, tapi jangan melewati pergantian jam (:00).
         # Kalau interval lebih panjang dari sisa detik ke jam berikutnya,
@@ -975,7 +1184,8 @@ def merge_chunks_to_base(base_no_ext, ext):
     list_txt = os.path.join("recordings", "concat_list.txt")
     with open(list_txt, "w", encoding="utf-8") as f:
         for c in chunks:
-            safe_path = c.replace("'", "'\"'\"'")
+            abs_path = os.path.abspath(c)
+            safe_path = abs_path.replace("'", "'\"'\"'")
             f.write(f"file '{safe_path}'\n")
 
     temp_output = os.path.join("recordings", "__merged_temp__." + ext)
@@ -1073,9 +1283,9 @@ def run_ffmpeg(url, suffix="", position=0, no_upload=False):
     cmd = [
         "./ffmpeg", "-y", "-hide_banner",
         "-reconnect", "1", "-reconnect_at_eof", "1", "-reconnect_streamed", "1",
-        "-reconnect_delay_max", "0", "-reconnect_on_network_error", "1",
+        "-reconnect_delay_max", "5", "-reconnect_on_network_error", "1",
         "-reconnect_on_http_error", "4xx,5xx",
-        "-timeout", "5000000",
+        "-timeout", "15000000",
     ]
     if SELECTED_PROXY:
         proxy_for_ffmpeg = SELECTED_PROXY if SELECTED_PROXY.startswith("http://") else f"http://{SELECTED_PROXY}"
@@ -1221,11 +1431,19 @@ def upload_to_archive(file_path, retries=5):
     item_identifier = f"vot-denpasar-{now_wita().strftime('%Y%m%d-%H%M%S')}"
     filename = os.path.basename(file_path)
 
+    # Sertakan stats.json jika ada
+    files_to_upload = [file_path]
+    if os.path.exists(STATS_FILE):
+        # Tunggu sebentar agar queue stats sempat ter-flush
+        _stats_queue.join() if not _stats_queue.empty() else None
+        files_to_upload.append(STATS_FILE)
+        log(f"[STATS] stats.json akan ikut diupload bersama rekaman.")
+
     for attempt in range(1, retries + 1):
         try:
             upload(
                 item_identifier,
-                files=[file_path],
+                files=files_to_upload,
                 metadata={
                     'mediatype': 'audio',
                     'title': filename,
@@ -1390,16 +1608,39 @@ def main_recording():
 
     stream_url = ARGS.stream_url if ARGS.stream_url else "http://i.klikhost.com:8502/stream"
 
+    # Mulai stats writer di background (hanya sekali per session)
+    if not _stats_writer_stop.is_set() or _stats_queue.empty():
+        start_stats_writer()
+
     # Evaluasi Proxy
     global SELECTED_PROXY
     if ARGS.random_proxy:
-        log("[PROXY-SEARCH] Opsi --random-proxy diaktifkan. Mencari proxy...")
-        found = find_working_proxy()
-        if found:
-            SELECTED_PROXY = found
+        if PROXY_POOL:
+            # Restart ke-N: pool sudah ada, tidak perlu re-download 468k proxy.
+            # Validasi ulang proxy aktif saat ini; jika mati, ambil dari warm pool.
+            log("[PROXY-SEARCH] Pool sudah tersedia — revalidasi proxy aktif...")
+            with PROXY_WARM_LOCK:
+                warm_available = len(PROXY_WARM_POOL)
+            if warm_available > 0:
+                found = next_proxy_from_pool()
+            else:
+                found = search_working_proxy_in_pool(PROXY_POOL_INDEX)
+                if found:
+                    PROXY_POOL_INDEX, found = found
+            if found:
+                SELECTED_PROXY = found
+                log(f"[PROXY-OK] Proxy aktif untuk sesi ini: {SELECTED_PROXY}")
+            else:
+                log("[WARN] Tidak ada proxy tersedia, fallback ke koneksi langsung.")
+                SELECTED_PROXY = None
         else:
-            log("[WARN] auto-proxy gagal menemukan (atau koneksi habis), fallback ke koneksi langsung.")
-            SELECTED_PROXY = None
+            log("[PROXY-SEARCH] Opsi --random-proxy diaktifkan. Mencari proxy...")
+            found = find_working_proxy()
+            if found:
+                SELECTED_PROXY = found
+            else:
+                log("[WARN] auto-proxy gagal menemukan (atau koneksi habis), fallback ke koneksi langsung.")
+                SELECTED_PROXY = None
     elif ARGS.proxy:
         raw_manual = ARGS.proxy.strip()
         for prefix in ("https://", "http://"):
@@ -1499,5 +1740,6 @@ if __name__ == "__main__":
             continue
 
     # Beri sedikit waktu agar background thread selesai sebelum program benar-benar mati
+    stop_stats_writer()
     time.sleep(2) 
     log("[END] Program selesai.")

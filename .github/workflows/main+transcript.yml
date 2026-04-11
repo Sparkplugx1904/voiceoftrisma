@@ -12,16 +12,17 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        suffix: ["-s 0 -p 0 --random-proxy --start-time 15:30"]
+        # suffix: ["-s 0 -p 0 --random-proxy --start-time 15:30"]
+        suffix: ["-s 0 -p 0"]
     outputs:
       url_s0p0: ${{ steps.map.outputs.url_s0p0 }}
       id_s0p0:  ${{ steps.map.outputs.id_s0p0 }}
 
     steps:
-      # - name: Setup Cloudflare WARP
-      #   uses: fscarmen/warp-on-actions@v1.4
-      #   with:
-      #     stack: dual
+      - name: Setup Cloudflare WARP
+        uses: fscarmen/warp-on-actions@v1.4
+        with:
+          stack: dual
 
       - name: Download Python recorder & FFmpeg
         run: |
