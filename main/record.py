@@ -572,7 +572,7 @@ def search_working_proxy_in_pool(start_idx):
     if not PROXY_POOL or start_idx >= len(PROXY_POOL):
         return None
 
-    target_stats = "http://i.klikhost.com:8502/stats?json=1"
+    target_stats = "https://i.klikhost.com:8502/stats?json=1"
     found_proxy = None
     stop_event = threading.Event()
 
@@ -668,7 +668,7 @@ def _proxy_warmer_loop():
     """
     global PROXY_POOL_INDEX
 
-    target_stats = "http://i.klikhost.com:8502/stats?json=1"
+    target_stats = "https://i.klikhost.com:8502/stats?json=1"
     scan_idx = PROXY_POOL_INDEX + 1   # mulai setelah proxy aktif saat ini
 
     while not _proxy_warmer_stop.is_set():
@@ -832,7 +832,7 @@ def find_working_proxy():
     agar wait_for_stream() bisa beralih ke proxy berikutnya tanpa re-download.
     """
     global PROXY_POOL, PROXY_POOL_INDEX
-    target_stats = "http://i.klikhost.com:8502/stats?json=1"
+    target_stats = "https://i.klikhost.com:8502/stats?json=1"
 
     log("[PROXY-SEARCH] Mengunduh daftar proxy terbaru dari semua sumber...")
     proxies_raw = []
@@ -973,7 +973,7 @@ def wait_for_stream(url):
     last_seen_hour = now_wita().hour
     ping_count = 0
 
-    target_stats = "http://i.klikhost.com:8502/stats?json=1"
+    target_stats = "https://i.klikhost.com:8502/stats?json=1"
     log(f"[WAIT] Menunggu siaran — request ke stats: {target_stats}")
 
     # Mulai mengumpulkan 16 proxy siap di latar belakang
