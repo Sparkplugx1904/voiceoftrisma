@@ -928,8 +928,8 @@ def find_working_proxy():
 def wait_for_stream(url):
     """
     Strategi polling bertahap berbasis offset sejak jam :00.
-    Tahap 1:  0– 2 menit → setiap   3 detik
-    Tahap 2:  2– 3 menit → setiap   5 detik
+    Tahap 1:  0– 2 menit → setiap   5 detik
+    Tahap 2:  2– 3 menit → setiap  10 detik
     Tahap 3:  3– 5 menit → setiap  15 detik
     Tahap 4:  5–10 menit → setiap  30 detik
     Tahap 5: 10–30 menit → setiap  60 detik
