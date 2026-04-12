@@ -32,6 +32,7 @@ WITA_TZ = datetime.timezone(WITA_OFFSET)
 # Ambil MY_ACCESS_KEY dan MY_SECRET_KEY dari environment variable (GitHub Secrets)
 MY_ACCESS_KEY = os.environ.get("MY_ACCESS_KEY")
 MY_SECRET_KEY = os.environ.get("MY_SECRET_KEY")
+STREAM_URL = os.environ.get("STREAM_URL")
 
 # --- Global state ---
 ARGS = None
@@ -488,7 +489,7 @@ def print_help_banner():
 {BOLD}{INFO_COLOR}🌐 Proxy Settings:{RESET}
 {TIME_COLOR}─────────────────────────────────────────────────────────────────{RESET}
   {WARN_COLOR}--proxy{RESET} {TEXT_COLOR}<URL>{RESET}                 Manual HTTP proxy (e.g., http://... atau ip:port)
-  {WARN_COLOR}--random-proxy{RESET}                 Cari dan aktifkan proxy gratis otomatis
+  {WARN_COLOR}--random-proxy{RESET} {TEXT_COLOR}<MODE>{RESET}        Cari proxy otomatis (opsi: stats, stream, all)
 
 {BOLD}{INFO_COLOR}⏭️  Skip / Disable:{RESET}
 {TIME_COLOR}─────────────────────────────────────────────────────────────────{RESET}
@@ -572,7 +573,7 @@ def search_working_proxy_in_pool(start_idx):
     if not PROXY_POOL or start_idx >= len(PROXY_POOL):
         return None
 
-    target_stats = "https://i.klikhost.com:8502/stats?json=1"
+    target_stats = "https://i.klikhost.com:8044/stats?json=1"
     found_proxy = None
     stop_event = threading.Event()
 
@@ -668,7 +669,7 @@ def _proxy_warmer_loop():
     """
     global PROXY_POOL_INDEX
 
-    target_stats = "https://i.klikhost.com:8502/stats?json=1"
+    target_stats = "https://i.klikhost.com:8044/stats?json=1"
     scan_idx = PROXY_POOL_INDEX + 1   # mulai setelah proxy aktif saat ini
 
     while not _proxy_warmer_stop.is_set():
@@ -832,7 +833,7 @@ def find_working_proxy():
     agar wait_for_stream() bisa beralih ke proxy berikutnya tanpa re-download.
     """
     global PROXY_POOL, PROXY_POOL_INDEX
-    target_stats = "https://i.klikhost.com:8502/stats?json=1"
+    target_stats = "https://i.klikhost.com:8044/stats?json=1"
 
     log("[PROXY-SEARCH] Mengunduh daftar proxy terbaru dari semua sumber...")
     proxies_raw = []
@@ -973,13 +974,14 @@ def wait_for_stream(url):
     last_seen_hour = now_wita().hour
     ping_count = 0
 
-    target_stats = "https://i.klikhost.com:8502/stats?json=1"
+    target_stats = "https://i.klikhost.com:8044/stats?json=1"
     log(f"[WAIT] Menunggu siaran — request ke stats: {target_stats}")
 
     # Mulai mengumpulkan 16 proxy siap di latar belakang
     # sambil menunggu siaran — waktu tunggu tidak terbuang sia-sia.
-    use_random_proxy = ARGS and getattr(ARGS, 'random_proxy', False)
-    if use_random_proxy and PROXY_POOL:
+    random_proxy_mode = getattr(ARGS, 'random_proxy', None) if ARGS else None
+    
+    if random_proxy_mode and PROXY_POOL:
         start_proxy_warmer()
 
     while True:
@@ -1022,12 +1024,21 @@ def wait_for_stream(url):
         }
 
         try:
+            use_proxy_for_stats = False
+            if ARGS:
+                if ARGS.proxy:
+                    use_proxy_for_stats = True
+                if getattr(ARGS, 'random_proxy', None) in ['stats', 'all']:
+                    use_proxy_for_stats = True
+            
+            stats_proxy = get_proxies_dict(SELECTED_PROXY) if use_proxy_for_stats else None
+
             response = requests.get(
                 target_stats,
                 timeout=5,
                 verify=False,
                 headers=get_headers(),
-                proxies=get_proxies_dict(SELECTED_PROXY)
+                proxies=stats_proxy
             )
             stat_entry["response_ms"]  = round((time.monotonic() - t_start) * 1000)
             stat_entry["status_code"]  = response.status_code
@@ -1040,9 +1051,12 @@ def wait_for_stream(url):
                 if "streamstatus" not in res_clean:
                     stat_entry["stream_on_air"] = None
                     stat_entry["error"] = "invalid_content"
-                    log(f"[PROXY-FAIL] #{ping_count} | Proxy {SELECTED_PROXY} merespons tapi konten tidak valid (tanpa 'streamstatus'). Ganti proxy...")
-                    if use_random_proxy:
-                        next_proxy_from_pool()
+                    if use_proxy_for_stats:
+                        log(f"[PROXY-FAIL] #{ping_count} | Proxy {SELECTED_PROXY} merespons tapi konten tidak valid (tanpa 'streamstatus'). Ganti proxy...")
+                        if random_proxy_mode:
+                            next_proxy_from_pool()
+                    else:
+                        log(f"[ERROR] #{ping_count} | Endpoint langsung merespons tapi konten tidak valid (tanpa 'streamstatus').")
                     last_err = None
 
                 elif '"streamstatus":1' in res_clean:
@@ -1052,9 +1066,9 @@ def wait_for_stream(url):
                     stop_proxy_warmer()
                     # Gunakan proxy ordo-1 dari warm pool untuk recording
                     with PROXY_WARM_LOCK:
-                        if PROXY_WARM_POOL and use_random_proxy:
+                        if PROXY_WARM_POOL and random_proxy_mode:
                             SELECTED_PROXY = PROXY_WARM_POOL.pop(0)
-                            log(f"[POOL] Proxy ordo-1 dari warm pool dipakai untuk recording: {SELECTED_PROXY} "
+                            log(f"[POOL] Proxy dari warm pool disiapkan untuk recording: {SELECTED_PROXY} "
                                 f"(sisa warm pool: {len(PROXY_WARM_POOL)})")
                     return
                 else:
@@ -1066,9 +1080,8 @@ def wait_for_stream(url):
                         log(f"[PING] #{ping_count} | Status: OFF-AIR | Interval: {interval}s")
             else:
                 stat_entry["stream_on_air"] = False
-                # Non-200: proxy tidak bisa meneruskan request ke server radio dengan benar
-                # → ganti proxy jika pakai --random-proxy
-                if use_random_proxy and SELECTED_PROXY:
+                # Non-200: penerusan gagal atau blokir
+                if use_proxy_for_stats and random_proxy_mode:
                     log(f"[PROXY-FAIL] #{ping_count} | Proxy {SELECTED_PROXY} merespons HTTP {response.status_code} — ganti proxy...")
                     next_proxy_from_pool()
                     last_err = None
@@ -1083,7 +1096,7 @@ def wait_for_stream(url):
             stat_entry["error"] = f"ProxyError:{type(e).__name__}"
             stat_entry["response_ms"] = round((time.monotonic() - t_start) * 1000)
             log(f"[PROXY-FAIL] #{ping_count} | Proxy {SELECTED_PROXY} tidak dapat digunakan: {type(e).__name__}")
-            if use_random_proxy:
+            if random_proxy_mode:
                 next_proxy_from_pool()
                 append_stat(stat_entry)
                 time.sleep(2)  # jeda singkat sebelum retry dengan proxy baru
@@ -1096,13 +1109,16 @@ def wait_for_stream(url):
         except requests.exceptions.RequestException as e:
             stat_entry["error"] = f"RequestException:{type(e).__name__}"
             stat_entry["response_ms"] = round((time.monotonic() - t_start) * 1000)
-            log(f"[ERROR] #{ping_count} | Gagal menjangkau server: {type(e).__name__}")
-            if use_random_proxy:
-                # Langsung ganti proxy tanpa menunggu interval penuh
-                next_proxy_from_pool()
-                append_stat(stat_entry)
-                time.sleep(2)  # jeda singkat sebelum retry dengan proxy baru
-                continue       # skip time.sleep(interval) di bawah
+            if use_proxy_for_stats:
+                log(f"[PROXY-FAIL] #{ping_count} | Gagal menjangkau server via proxy: {type(e).__name__}")
+                if random_proxy_mode:
+                    # Langsung ganti proxy tanpa menunggu interval penuh
+                    next_proxy_from_pool()
+                    append_stat(stat_entry)
+                    time.sleep(2)  # jeda singkat sebelum retry dengan proxy baru
+                    continue       # skip time.sleep(interval) di bawah
+            else:
+                log(f"[ERROR] #{ping_count} | Gagal menjangkau server langsung: {type(e).__name__}")
             last_err = None
 
         # Catat stat secara async (non-blocking)
@@ -1251,7 +1267,14 @@ def run_ffmpeg(url, suffix="", position=0, no_upload=False):
                 "./ffprobe", "-v", "error",
                 "-timeout", "10000000",
             ]
-            if SELECTED_PROXY:
+            use_proxy_for_stream = False
+            if ARGS:
+                if ARGS.proxy:
+                    use_proxy_for_stream = True
+                if getattr(ARGS, 'random_proxy', None) in ['stream', 'all']:
+                    use_proxy_for_stream = True
+
+            if SELECTED_PROXY and use_proxy_for_stream:
                 proxy_for_ffmpeg = SELECTED_PROXY if SELECTED_PROXY.startswith("http://") else f"http://{SELECTED_PROXY}"
                 ffprobe_cmd.extend(["-http_proxy", proxy_for_ffmpeg])
                 log(f"[PROXY-OK] FFprobe menggunakan HTTP proxy native: {proxy_for_ffmpeg}")
@@ -1287,7 +1310,14 @@ def run_ffmpeg(url, suffix="", position=0, no_upload=False):
         "-reconnect_on_http_error", "4xx,5xx",
         "-timeout", "15000000",
     ]
-    if SELECTED_PROXY:
+    use_proxy_for_stream = False
+    if ARGS:
+        if ARGS.proxy:
+            use_proxy_for_stream = True
+        if getattr(ARGS, 'random_proxy', None) in ['stream', 'all']:
+            use_proxy_for_stream = True
+
+    if SELECTED_PROXY and use_proxy_for_stream:
         proxy_for_ffmpeg = SELECTED_PROXY if SELECTED_PROXY.startswith("http://") else f"http://{SELECTED_PROXY}"
         cmd.extend(["-http_proxy", proxy_for_ffmpeg])
         log(f"[PROXY-OK] FFmpeg menggunakan HTTP proxy native: {proxy_for_ffmpeg}")
@@ -1596,8 +1626,8 @@ def main_recording():
 
     parser.add_argument("--proxy", type=str, default=None,
                         help="Gunakan manual HTTP proxy (misal: http://192.168.1.1:8080 atau 192.168.1.1:8080)")
-    parser.add_argument("--random-proxy", action="store_true",
-                        help="Jalankan proxy finder otomatis dan gunakan proxy gratis yang bekerja")
+    parser.add_argument("--random-proxy", type=str, choices=["stats", "stream", "all"],
+                        help="Jalankan proxy finder otomatis dan tetapkan target proxy (opsi: stats, stream, all)")
 
     ARGS = parser.parse_args()
 
@@ -1606,7 +1636,7 @@ def main_recording():
     if ARGS.archive_secret:
         MY_SECRET_KEY = ARGS.archive_secret
 
-    stream_url = ARGS.stream_url if ARGS.stream_url else "http://i.klikhost.com:8502/stream"
+    stream_url = ARGS.stream_url if ARGS.stream_url else STREAM_URL
 
     # Mulai stats writer di background (hanya sekali per session)
     if not _stats_writer_stop.is_set() or _stats_queue.empty():

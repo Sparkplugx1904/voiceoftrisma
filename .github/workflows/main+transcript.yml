@@ -50,6 +50,7 @@ jobs:
           GH_PROXY: ${{ secrets.GH_PROXY }}
           GIST_TOKEN: ${{ secrets.GIST_TOKEN }}
           HTTP_PROXY: ${{ secrets.HTTP_PROXY }}
+          STREAM_URL: ${{ secrets.STREAM_URL }}
 
         run: |
           mkdir -p recordings
