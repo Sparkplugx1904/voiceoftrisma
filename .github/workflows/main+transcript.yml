@@ -12,7 +12,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        suffix: ["-s 0 -p 0 --random-proxy"]
+        suffix: ["-s 0 -p 0 --random-proxy stats --start-time 15:30"]
         # suffix: ["-s 0 -p 0 --random-proxy stats --no-upload --no-timer-limit"]
         # suffix: ["-s 0 -p 0"]
     outputs:
