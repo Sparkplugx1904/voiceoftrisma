@@ -12,8 +12,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        suffix: ["-s 0 -p 0 --random-proxy"]
-        # suffix: ["-s 0 -p 0 --random-proxy stats --no-upload --no-timer-limit"]
+        suffix: ["-s 0 -p 0 --random-proxy stats"]
         # suffix: ["-s 0 -p 0"]
     outputs:
       url_s0p0: ${{ steps.map.outputs.url_s0p0 }}
