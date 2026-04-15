@@ -1178,20 +1178,27 @@ def list_chunks_ordered(base_no_ext, ext):
     base_name = os.path.basename(base_no_ext)
     pattern = re.compile(r'^' + re.escape(base_name) + r'(?:_(\d+))?\.' + re.escape(ext) + r'$')
 
+    # final_output adalah file hasil merge — jangan ikutkan sebagai chunk
+    # agar tidak ter-merge ulang pada restart berikutnya
+    final_output_abs = os.path.abspath(f"{base_no_ext}.{ext}")
+
     files = []
     for f in os.listdir(dirpath):
         if pattern.match(f):
             full = os.path.join(dirpath, f)
+            if os.path.abspath(full) == final_output_abs:
+                continue  # skip: ini file merged hasil sesi sebelumnya
             try:
                 mtime = os.path.getmtime(full)
             except:
                 mtime = 0
-            files.append((mtime, full))
-    files.sort(key=lambda x: x[0])
-    return [f for _, f in files]
+            # sort primer: mtime; sekunder: nama file (hindari ambiguitas saat mtime sama)
+            files.append((mtime, f, full))
+    files.sort(key=lambda x: (x[0], x[1]))
+    return [full for _, _, full in files]
 
 
-def merge_chunks_to_base(base_no_ext, ext):
+def merge_chunks_to_base(base_no_ext, ext, keep_raw=False):
     chunks = list_chunks_ordered(base_no_ext, ext)
     if not chunks:
         log("[MERGE] Tidak ada chunk yang bisa digabung.")
@@ -1207,6 +1214,14 @@ def merge_chunks_to_base(base_no_ext, ext):
     temp_output = os.path.join("recordings", "__merged_temp__." + ext)
     final_output = f"{base_no_ext}.{ext}"
 
+    # Hapus sisa temp merge dari run sebelumnya yang crash
+    if os.path.exists(temp_output):
+        log(f"[WARN] File temp merge lama ditemukan, menghapus: {temp_output}")
+        try:
+            os.remove(temp_output)
+        except Exception as e:
+            log(f"[WARN] Gagal menghapus temp lama: {e}")
+
     try:
         cmd = [
             "./ffmpeg", "-hide_banner", "-f", "concat", "-safe", "0",
@@ -1218,12 +1233,27 @@ def merge_chunks_to_base(base_no_ext, ext):
         shutil.move(temp_output, final_output)
         log(f"[MERGE] Berhasil digabung → {final_output}")
 
-        for c in chunks:
-            try:
-                os.remove(c)
-                log(f"[CLEAN] File sementara dihapus: {c}")
-            except Exception as e:
-                log(f"[WARN] Gagal menghapus file sementara {c}: {e}")
+        if keep_raw:
+            # Pindah semua chunk ke subfolder raw/ agar tidak ter-merge ulang
+            raw_dir = os.path.join(os.path.dirname(base_no_ext) or "recordings", "raw")
+            os.makedirs(raw_dir, exist_ok=True)
+            for c in chunks:
+                try:
+                    dest = os.path.join(raw_dir, os.path.basename(c))
+                    shutil.move(c, dest)
+                    log(f"[CLEAN] Raw chunk dipindah ke: {dest}")
+                except Exception as e:
+                    log(f"[WARN] Gagal memindah raw chunk {c}: {e}")
+        else:
+            for c in chunks:
+                try:
+                    if os.path.abspath(c) == os.path.abspath(final_output):
+                        log(f"[CLEAN] Melewati chunk final (sudah jadi output): {c}")
+                        continue
+                    os.remove(c)
+                    log(f"[CLEAN] File sementara dihapus: {c}")
+                except Exception as e:
+                    log(f"[WARN] Gagal menghapus file sementara {c}: {e}")
 
         try:
             os.remove(list_txt)
@@ -1401,11 +1431,15 @@ def run_ffmpeg(url, suffix="", position=0, no_upload=False):
 
     # Merge Logic (skip jika --no-merge-chunks aktif)
     no_merge = ARGS and ARGS.no_merge_chunks
+    keep_raw = bool(ARGS and getattr(ARGS, 'with_raw', False))
     filename_to_upload = filename
+
+    if keep_raw and no_merge:
+        log("[WARN] --with-raw diabaikan karena --no-merge-chunks aktif (tidak ada merge = tidak ada raw chunk).")
 
     if cutoff_reached and not no_merge:
         log("[MERGE] Melakukan merge semua chunk menjadi file base final...")
-        merged = merge_chunks_to_base(base_no_ext, ext)
+        merged = merge_chunks_to_base(base_no_ext, ext, keep_raw=keep_raw)
         if merged:
             filename_to_upload = merged
         else:
@@ -1608,6 +1642,8 @@ def main_recording():
     parser.add_argument("--no-merge-chunks", action="store_true", help="Skip penggabungan chunk (jika ada multiple record)")
     parser.add_argument("--no-log", action="store_true", help="Nonaktifkan semua log output")
     parser.add_argument("--no-save", action="store_true", help="Tidak menyimpan file rekaman (hapus setelah selesai)")
+    parser.add_argument("--with-raw", action="store_true", dest="with_raw",
+                        help="Simpan chunk mentah (sebelum merge) di subfolder recordings/raw/")
 
     parser.add_argument("--archive-access", "--archive-acc", type=str, default=None, dest="archive_access",
                         help="Archive.org access key (override env var)")
@@ -1730,6 +1766,7 @@ if __name__ == "__main__":
         start_time = pre_args.start_time
         no_save = False
         no_merge_chunks = False
+        with_raw = False
         archive_access = None
         archive_secret = None
     ARGS = _TempArgs()
