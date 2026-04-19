@@ -83,7 +83,7 @@ jobs:
       fail-fast: false
       matrix:
         pair:
-          - { suffix: "s0p0", url: "${{ needs.record.outputs.url_s0p0 }}", item: "${{ needs.record.outputs.id_s0p0 }}" }
+          - { suffix: "s1p1", url: "${{ needs.record.outputs.url_s1p1 }}", item: "${{ needs.record.outputs.id_s1p1 }}" }
 
     steps:
       - name: Checkout

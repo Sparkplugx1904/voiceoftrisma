@@ -1069,13 +1069,13 @@ def find_working_proxy():
 def wait_for_stream(url):
     """
     Strategi polling bertahap berbasis offset sejak jam :00.
-    Tahap 1:  0– 2 menit → setiap   5 detik
-    Tahap 2:  2– 3 menit → setiap  10 detik
-    Tahap 3:  3– 5 menit → setiap  15 detik
-    Tahap 4:  5–10 menit → setiap  30 detik
-    Tahap 5: 10–30 menit → setiap  60 detik
-    Tahap 6: 30–50 menit → setiap  90 detik
-    Tahap 7: 50–60 menit → setiap 120 detik
+    Tahap 1:  0– 2 menit → setiap   3 detik
+    Tahap 2:  2– 3 menit → setiap   5 detik
+    Tahap 3:  3– 5 menit → setiap  10 detik
+    Tahap 4:  5–10 menit → setiap  15 detik
+    Tahap 5: 10–30 menit → setiap  30 detik
+    Tahap 6: 30–50 menit → setiap  60 detik
+    Tahap 7: 50–60 menit → setiap  90 detik
 
     Saat jam :00, offset otomatis kembali ke 0 sehingga
     polling kembali ke Tahap 1 yang cepat.
@@ -1086,28 +1086,28 @@ def wait_for_stream(url):
     """
     global SELECTED_PROXY
     STAGES = [
-        (   0,  120,   5),
-        ( 120,  180,   10),
-        ( 180,  300,  15),
-        ( 300,  600,  30),
-        ( 600, 1800,  60),
-        (1800, 3000,  90),
-        (3000, 3600, 120),
+        (   0,  120,   3),
+        ( 120,  180,   5),
+        ( 180,  300,  10),
+        ( 300,  600,  15),
+        ( 600, 1800,  30),
+        (1800, 3000,  60),
+        (3000, 3600,  90),
     ]
 
     def get_interval(elapsed_seconds):
         for start, end, interval in STAGES:
             if start <= elapsed_seconds < end:
                 return interval
-        return 120
+        return 90
 
     def seconds_since_last_hour():
         now = now_wita()
         return now.minute * 60 + now.second
 
     stage_labels = {
-        3: "0–2 mnt", 5: "2–3 mnt", 15: "3–5 mnt",
-        30: "5–10 mnt", 60: "10–30 mnt", 90: "30–50 mnt", 120: "50–60 mnt",
+        3: "0–2 mnt", 5: "2–3 mnt", 10: "3–5 mnt",
+        15: "5–10 mnt", 30: "10–30 mnt", 60: "30–50 mnt", 90: "50–60 mnt",
     }
     last_interval = None
     last_err = None
