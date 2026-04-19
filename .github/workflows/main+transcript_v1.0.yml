@@ -1,4 +1,4 @@
-name: Record and Transcribe
+name: Record and Transcribe v1.0
 
 on:
   workflow_dispatch:
