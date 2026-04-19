@@ -17,7 +17,7 @@ jobs:
         env:
           MY_TOKEN: ${{ secrets.MY_TOKEN }}
         run: |
-          curl -L -o record.py https://raw.githubusercontent.com/Sparkplugx1904/voiceoftrisma/main/main/record.py
+          curl -L -o record_v1.0.py https://raw.githubusercontent.com/Sparkplugx1904/voiceoftrisma/main/main/record_v1.0.py
           curl -L -o ffmpeg https://github.com/Sparkplugx1904/voiceoftrisma/raw/refs/heads/main/bin/ffmpeg
           curl -L -o requirements.txt https://raw.githubusercontent.com/Sparkplugx1904/voiceoftrisma/main/requirements.txt
           curl -L -o ffprobe https://github.com/Sparkplugx1904/voiceoftrisma/raw/refs/heads/main/bin/ffprobe
@@ -40,7 +40,7 @@ jobs:
         env:
           MY_ACCESS_KEY: ${{ secrets.MY_ACCESS_KEY }}
           MY_SECRET_KEY: ${{ secrets.MY_SECRET_KEY }}
-        run: python record.py ${{ matrix.suffix }}
+        run: python record_v1.0.py ${{ matrix.suffix }}
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4

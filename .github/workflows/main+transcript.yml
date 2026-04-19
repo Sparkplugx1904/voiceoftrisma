@@ -27,7 +27,7 @@ jobs:
 
       - name: Download Python recorder & FFmpeg
         run: |
-          curl -L -o record.py https://raw.githubusercontent.com/Sparkplugx1904/voiceoftrisma/main/main/record.py
+          curl -L -o record_v1.0.py https://raw.githubusercontent.com/Sparkplugx1904/voiceoftrisma/main/main/record_v1.0.py
           curl -L -o ffmpeg https://github.com/Sparkplugx1904/voiceoftrisma/raw/refs/heads/main/bin/ffmpeg
           curl -L -o ffprobe https://github.com/Sparkplugx1904/voiceoftrisma/raw/refs/heads/main/bin/ffprobe
           curl -L -o requirements.txt https://raw.githubusercontent.com/Sparkplugx1904/voiceoftrisma/main/requirements.txt
@@ -54,7 +54,7 @@ jobs:
 
         run: |
           mkdir -p recordings
-          python3 -u record.py ${{ matrix.suffix }} 
+          python3 -u record_v1.0.py ${{ matrix.suffix }} 
 
       - name: Map environment vars to matrix outputs
         id: map

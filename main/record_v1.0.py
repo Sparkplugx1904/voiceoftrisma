@@ -746,12 +746,89 @@ def stop_proxy_warmer():
 
 
 # =============================================
+# PARALLEL PROXY SELECTOR
+# Digunakan saat reconnect agar tidak membuang
+# waktu test proxy satu-per-satu secara sekuensial.
+# Mengambil batch dari warm pool, test serentak,
+# dan memakai yang pertama berhasil.
+# =============================================
+def next_proxy_parallel_from_pool(target_url=None, max_batch=8, timeout=5):
+    """
+    Test hingga max_batch proxy dari warm pool secara parallel.
+    Proxy yang tidak lulus (termasuk yang kalah lomba) dibuang dari pool.
+    Kembalikan proxy pemenang, atau fallback ke next_proxy_from_pool() jika semua gagal.
+    """
+    global SELECTED_PROXY
+
+    if not target_url:
+        target_url = "https://i.klikhost.com:8502/stats?json=1"
+
+    # Ambil kandidat dari warm pool
+    with PROXY_WARM_LOCK:
+        batch = list(PROXY_WARM_POOL[:max_batch])
+
+    if not batch:
+        # Warm pool kosong — fallback ke sequential scan
+        return next_proxy_from_pool()
+
+    winner_holder = [None]
+    winner_lock   = threading.Lock()
+    stop_event    = threading.Event()
+
+    def _check(px):
+        if stop_event.is_set():
+            return
+        px_url = f"http://{px}"
+        try:
+            res = requests.get(
+                target_url,
+                proxies={"http": px_url, "https": px_url},
+                timeout=timeout,
+                verify=False,
+            )
+            if res.status_code == 200 and "streamstatus" in res.text:
+                with winner_lock:
+                    if winner_holder[0] is None:
+                        winner_holder[0] = px
+                        stop_event.set()
+        except Exception:
+            pass
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=len(batch)) as ex:
+        futs = [ex.submit(_check, px) for px in batch]
+        concurrent.futures.wait(futs, timeout=timeout + 2)
+
+    winner = winner_holder[0]
+
+    # Hapus semua kandidat batch dari warm pool (pemenang sudah dipakai, losers sudah mati)
+    with PROXY_WARM_LOCK:
+        for px in batch:
+            try:
+                PROXY_WARM_POOL.remove(px)
+            except ValueError:
+                pass
+        remaining = len(PROXY_WARM_POOL)
+
+    if winner:
+        SELECTED_PROXY = winner
+        log(f"[POOL] Parallel pick: {winner} terpilih dari {len(batch)} kandidat "
+            f"(sisa warm pool: {remaining}/{PROXY_WARM_TARGET})")
+        return winner
+
+    # Semua kandidat batch gagal — cari lagi dari sisa pool
+    log(f"[PROXY-FAIL] Seluruh batch {len(batch)} proxy gagal. Mencari dari sisa pool...")
+    return next_proxy_from_pool()
+
+
+# =============================================
 # STATS WRITER — async queue-based
 # =============================================
 def _stats_writer_loop():
     """
     Background thread: flush _stats_queue ke STATS_FILE (NDJSON).
-    Tulis dilakukan di luar jalur utama sehingga tidak mem-bottleneck ping.
+    Setiap baris ditulis dalam dua grup:
+      - "connection": info koneksi proxy (ping_no, proxy, status_code, dll)
+      - "stats"     : response body JSON dari stats endpoint
     """
     os.makedirs("recordings", exist_ok=True)
     while not _stats_writer_stop.is_set() or not _stats_queue.empty():
@@ -760,9 +837,21 @@ def _stats_writer_loop():
         except queue.Empty:
             continue
         try:
+            formatted = {
+                "time": entry.get("time"),
+                "connection": {
+                    "ping_no"      : entry.get("ping_no"),
+                    "proxy"        : entry.get("proxy"),
+                    "status_code"  : entry.get("status_code"),
+                    "stream_on_air": entry.get("stream_on_air"),
+                    "response_ms"  : entry.get("response_ms"),
+                    "error"        : entry.get("error"),
+                },
+                "stats": entry.get("stats_body"),
+            }
             with open(STATS_FILE, "a", encoding="utf-8") as f:
-                f.write(json.dumps(entry, ensure_ascii=False) + "\n")
-        except Exception as e:
+                f.write(json.dumps(formatted, ensure_ascii=False) + "\n")
+        except Exception:
             pass   # Jangan crash program hanya karena stats gagal tulis
         finally:
             _stats_queue.task_done()
@@ -1021,6 +1110,7 @@ def wait_for_stream(url):
             "stream_on_air": None,
             "response_ms": None,
             "error"      : None,
+            "stats_body" : None,   # ← response body JSON dari stats endpoint
         }
 
         try:
@@ -1042,6 +1132,13 @@ def wait_for_stream(url):
             )
             stat_entry["response_ms"]  = round((time.monotonic() - t_start) * 1000)
             stat_entry["status_code"]  = response.status_code
+
+            # Simpan response body asli sebagai stats_body (parse JSON jika bisa)
+            if response.status_code == 200:
+                try:
+                    stat_entry["stats_body"] = response.json()
+                except Exception:
+                    stat_entry["stats_body"] = response.text[:500]  # fallback: teks mentah (max 500 char)
 
             if response.status_code == 200:
                 res_clean = response.text.replace(" ", "")
@@ -1097,9 +1194,10 @@ def wait_for_stream(url):
             stat_entry["response_ms"] = round((time.monotonic() - t_start) * 1000)
             log(f"[PROXY-FAIL] #{ping_count} | Proxy {SELECTED_PROXY} tidak dapat digunakan: {type(e).__name__}")
             if random_proxy_mode:
-                next_proxy_from_pool()
+                # Gunakan parallel selector agar tidak membuang ~5 detik per proxy secara sekuensial
+                next_proxy_parallel_from_pool()
                 append_stat(stat_entry)
-                time.sleep(2)  # jeda singkat sebelum retry dengan proxy baru
+                time.sleep(1)  # jeda singkat sebelum retry
                 continue       # skip time.sleep(interval) di bawah
             else:
                 log("[WARN] Proxy gagal, fallback ke koneksi langsung.")
@@ -1112,10 +1210,10 @@ def wait_for_stream(url):
             if use_proxy_for_stats:
                 log(f"[PROXY-FAIL] #{ping_count} | Gagal menjangkau server via proxy: {type(e).__name__}")
                 if random_proxy_mode:
-                    # Langsung ganti proxy tanpa menunggu interval penuh
-                    next_proxy_from_pool()
+                    # Parallel di sini juga — RequestException biasanya timeout, lebih cepat batch
+                    next_proxy_parallel_from_pool()
                     append_stat(stat_entry)
-                    time.sleep(2)  # jeda singkat sebelum retry dengan proxy baru
+                    time.sleep(1)  # jeda singkat sebelum retry
                     continue       # skip time.sleep(interval) di bawah
             else:
                 log(f"[ERROR] #{ping_count} | Gagal menjangkau server langsung: {type(e).__name__}")
@@ -1164,7 +1262,9 @@ def get_next_chunk_filename(base_no_ext, ext):
                     max_index = 0
 
     if not found_any:
-        return f"{base_no_ext}.{ext}"
+        # Chunk pertama selalu pakai suffix _0 agar tidak bentrok
+        # dengan nama final output (base_no_ext.ext) yang dipakai setelah merge.
+        return f"{base_no_ext}_0.{ext}"
     else:
         if max_index < 0:
             next_idx = 1
@@ -1496,12 +1596,22 @@ def upload_to_archive(file_path, retries=5):
     filename = os.path.basename(file_path)
 
     # Sertakan stats.json jika ada
-    files_to_upload = [file_path]
+    # Gunakan dict {remote_path: local_path} agar raw/ bisa masuk sebagai subfolder di archive
+    files_to_upload = {os.path.basename(file_path): file_path}
     if os.path.exists(STATS_FILE):
         # Tunggu sebentar agar queue stats sempat ter-flush
         _stats_queue.join() if not _stats_queue.empty() else None
-        files_to_upload.append(STATS_FILE)
+        files_to_upload[os.path.basename(STATS_FILE)] = STATS_FILE
         log(f"[STATS] stats.json akan ikut diupload bersama rekaman.")
+
+    # Sertakan chunk mentah dari folder raw/ jika ada (aktif dengan --with-raw)
+    raw_dir = os.path.join("recordings", "raw")
+    if os.path.exists(raw_dir):
+        raw_files = sorted(f for f in os.listdir(raw_dir) if os.path.isfile(os.path.join(raw_dir, f)))
+        if raw_files:
+            for rf in raw_files:
+                files_to_upload[f"raw/{rf}"] = os.path.join(raw_dir, rf)
+            log(f"[MERGE] {len(raw_files)} chunk mentah dari folder raw/ akan diupload.")
 
     for attempt in range(1, retries + 1):
         try:
