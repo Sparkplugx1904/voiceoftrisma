@@ -1,6 +1,4 @@
-requests 
+requests
+urllib3
 internetarchive
-requests[socks]
-brotli
 python-dotenv
-dotenv

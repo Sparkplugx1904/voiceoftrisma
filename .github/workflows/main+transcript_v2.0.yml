@@ -68,8 +68,8 @@ jobs:
             exit 1
           fi
 
-          echo "url_s0p0=$ARCHIVE_URL" >> $GITHUB_OUTPUT
-          echo "id_s0p0=$ITEM_ID" >> $GITHUB_OUTPUT
+          echo "url_s1p1=$ARCHIVE_URL" >> $GITHUB_OUTPUT
+          echo "id_s1p1=$ITEM_ID" >> $GITHUB_OUTPUT
           echo "[ OK ] Environment successfully mapped to job outputs."
 
       - name: Waiting...
