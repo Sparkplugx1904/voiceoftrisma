@@ -936,7 +936,7 @@ def _load_proxy_sources():
         log(f"[WARN] Gagal parse HTTP_PROXY sebagai JSON: {e}. Proxy source list akan kosong.")
         return []
 
-PROXY_SOURCES = _load_proxy_sources()
+PROXY_SOURCES = []  # Dimuat lazy hanya saat --random-proxy diaktifkan
 
 def get_proxies_dict(proxy_url):
     """Kembalikan dict proxy untuk library requests.
@@ -956,8 +956,12 @@ def find_working_proxy():
     Seluruh daftar proxy yang sudah dinormalisasi disimpan ke PROXY_POOL global
     agar wait_for_stream() bisa beralih ke proxy berikutnya tanpa re-download.
     """
-    global PROXY_POOL, PROXY_POOL_INDEX
+    global PROXY_POOL, PROXY_POOL_INDEX, PROXY_SOURCES
     target_stats = "https://i.klikhost.com:8502/stats?json=1"
+
+    # Muat sumber proxy secara lazy — hanya saat fungsi ini benar-benar dipanggil
+    if not PROXY_SOURCES:
+        PROXY_SOURCES = _load_proxy_sources()
 
     log("[PROXY-SEARCH] Mengunduh daftar proxy terbaru dari semua sumber...")
     proxies_raw = []
