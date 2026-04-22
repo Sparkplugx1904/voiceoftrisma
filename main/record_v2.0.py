@@ -16,6 +16,7 @@ import re
 import shutil
 import queue
 import random
+import itertools
 import concurrent.futures
 from dotenv import load_dotenv
 load_dotenv()
@@ -765,7 +766,7 @@ def next_proxy_parallel_from_pool(target_url=None, max_batch=8, timeout=5):
 
     # Ambil kandidat dari warm pool
     with PROXY_WARM_LOCK:
-        batch = list(PROXY_WARM_POOL[:max_batch])
+        batch = list(itertools.islice(PROXY_WARM_POOL, max_batch))
 
     if not batch:
         # Warm pool kosong — fallback ke sequential scan
@@ -1830,7 +1831,7 @@ def wait_until_start_time(start_dt):
 # MAIN RECORDING
 # =============================================
 def main_recording():
-    global ARGS, MY_ACCESS_KEY, MY_SECRET_KEY
+    global ARGS, MY_ACCESS_KEY, MY_SECRET_KEY, PROXY_POOL_INDEX
 
     parser = argparse.ArgumentParser(
         description="VOT Radio Denpasar — Stream Recorder & Uploader",
