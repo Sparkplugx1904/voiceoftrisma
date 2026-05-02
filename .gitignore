@@ -18,3 +18,4 @@ main/ffprobe
 main/ffplay
 main/mycpp
 main/mycpp/.env
+*.exe
