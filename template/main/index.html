@@ -17,8 +17,8 @@
         rel="stylesheet">
 
     <!-- Main Application Stylesheet -->
-    <link rel="stylesheet" href="layout.css">
-    <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="css/layout.css">
+    <link rel="stylesheet" href="css/style.css">
 </head>
 
 <body>
@@ -49,66 +49,16 @@
                 </div>
             </div>
         </div>
-        <!-- Static Cards Removed as requested -->
 
-        <!-- Audio Player Bar (Glassmorphism + Neon) -->
-        <div class="audio-player-bar">
-            <!-- Progress bar hidden for stream -->
-            <input type="range" class="progress-bar-top" style="display: none;" min="0" max="100" value="45">
-
-            <div class="player-center player-info">
-                <div class="img-thumb-container">
-                    <div class="img-thumb glass-panel thumb-offline" id="playerThumb">
-                        <img src="./assets/madyapadma.svg" alt="Logo Madyapadma" width="30">
-                    </div>
-                </div>
-                <div class="song-title-wrapper">
-                    <div class="song-title">Siaran Langsung Voice of Trisma</div>
-                    <div class="song-program" id="currentProgram">Sedang Offline...</div>
-                    <div class="next-program" id="nextProgram" style="display: none;"></div>
-                </div>
-            </div>
-
-            <div class="player-controls">
-                <!-- Volume Slider moved to the left of backward step -->
-                <div class="volume-container">
-                    <button class="icon-btn" id="volumeBtn" title="Volume">
-                        <i class="fa-solid fa-volume-high"></i>
-                    </button>
-                    <div class="volume-slider-wrapper glass-panel" id="volumeSliderWrapper">
-                        <input type="range" class="volume-slider" min="0" max="100" value="100">
-                    </div>
-                </div>
-
-                <button class="icon-btn" title="Mundur 10 Detik">
-                    <i class="fa-solid fa-backward-step"></i>
-                </button>
-                <button class="play-pause-btn" id="playPauseBtn" title="Play/Pause">
-                    <svg width="24" height="24" viewBox="0 0 24 24">
-                        <path class="morph-path" fill="#ffffff" d="M 8 5 L 19 12 L 8 19 Z" />
-                    </svg>
-                </button>
-                <button class="icon-btn" title="Maju 10 Detik">
-                    <i class="fa-solid fa-forward-step"></i>
-                </button>
-
-                <!-- Archive Link moved to the right of forward step -->
-                <a href="archive" class="icon-btn" title="Arsip Siaran"
-                    style="display: flex; align-items: center; justify-content: center;">
-                    <i class="fa-solid fa-box-archive"></i>
-                </a>
-            </div>
-
-            <div class="player-tools">
-                <!-- Time text hidden for stream -->
-            </div>
-        </div>
+        <div id="player-placeholder"></div>
 
         <!-- Hidden Audio Element for Live Stream -->
         <audio id="mainAudio" src="http://i.klikhost.com:8502/stream" preload="none" style="display: none;"></audio>
 
-        <script src="load-layout.js"></script>
-        <script src="script.js"></script>
+        <script src="js/load-layout.js"></script>
+        <script src="js/api.js"></script>
+        <script src="js/player.js"></script>
+        <script src="js/script.js"></script>
         <script>
             (function () {
                 var input = document.getElementById('q');
@@ -121,13 +71,13 @@
                     }
                 }
 
-                btn.addEventListener('click', goSearch);
-                input.addEventListener('keydown', function (e) {
+                if (btn) btn.addEventListener('click', goSearch);
+                if (input) input.addEventListener('keydown', function (e) {
                     if (e.key === 'Enter') goSearch();
                 });
             })();
         </script>
-</body>
+    </div>
 </body>
 
 </html>

@@ -14,9 +14,9 @@
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&display=swap"
         rel="stylesheet">
 
-    <link rel="stylesheet" href="../layout.css">
-    <link rel="stylesheet" href="../style.css">
-    <link rel="stylesheet" href="./about.css">
+    <link rel="stylesheet" href="../css/layout.css">
+    <link rel="stylesheet" href="../css/style.css">
+    <link rel="stylesheet" href="../css/about.css">
 
 </head>
 
@@ -210,9 +210,15 @@
                 <li><strong>Jumat–Sabtu:</strong> 16.00 – 18.00 WITA</li>
             </ul>
         </article>
-    <audio id="mainAudio" src="http://i.klikhost.com:8502/stream" preload="none" style="display: none;"></audio>
-    <script src="../load-layout.js"></script>
-    <script src="about.js"></script>
+
+        <div id="player-placeholder"></div>
+
+        <audio id="mainAudio" src="http://i.klikhost.com:8502/stream" preload="none" style="display: none;"></audio>
+
+        <script src="../js/load-layout.js"></script>
+        <script src="../js/api.js"></script>
+        <script src="../js/player.js"></script>
+        <script src="../js/about.js"></script>
 </body>
 
 </html>
