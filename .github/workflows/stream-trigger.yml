@@ -1,0 +1,41 @@
+name: Stream Trigger
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 3 * * *" # Mulai otomatis jam 11:00 WITA (03:00 UTC)
+
+jobs:
+  launcher:
+    name: 🚀 Wait and Trigger Workflows
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Delay Until 15:30 WITA (07:30 UTC)
+        run: |
+          TARGET_UTC="07:30"
+          TARGET_EPOCH=$(date -d "$TARGET_UTC" +%s)
+          CURRENT_EPOCH=$(date +%s)
+          SLEEP_SECONDS=$((TARGET_EPOCH - CURRENT_EPOCH))
+
+          if [ $SLEEP_SECONDS -gt 0 ]; then
+            echo "[ INFO ] Menunggu $((SLEEP_SECONDS / 60)) menit hingga pukul 15:30 WITA..."
+            sleep $SLEEP_SECONDS
+          else
+            echo "[ WARNING ] Waktu target sudah terlewat, langsung eksekusi!"
+          fi
+
+      - name: Launch Workflows
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "[ LAUNCH ] Memulai main+transcript_v1.0.yml"
+          gh workflow run "main+transcript_v1.0.yml"
+
+          echo "[ LAUNCH ] Memulai main+transcript_v2.0.yml"
+          gh workflow run "main+transcript_v2.0.yml"
+          
+          echo "[ SUCCESS ] Semua workflow target berhasil dipicu."

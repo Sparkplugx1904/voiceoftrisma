@@ -2,8 +2,8 @@ name: Record and Transcribe v1.0
 
 on:
   workflow_dispatch:
-  schedule:
-    - cron: "0 5 * * *"   # Tiap hari jam 05:00 UTC (~13:00 WITA)
+  # schedule:
+  #   - cron: "0 5 * * *"   # Tiap hari jam 05:00 UTC (~13:00 WITA)
 
 jobs:
   record:
