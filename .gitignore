@@ -1,22 +1,45 @@
+# ============================================
+# Voice of Trisma — .gitignore
+# ============================================
+
+# --- Editor / IDE ---
 .vscode/
-act
-Project
-TODO.md
-uploads
-recordings
-ffmpeg
-ffprobe
-*/tempCodeRunnerFile.sh
-node_modules
-main/tempCodeRunnerFile.py
+
+# --- OS artifacts ---
+.DS_Store
+*.exe
+
+# --- Environment ---
+.env
+
+# --- Dependencies ---
+node_modules/
 package.json
 package-lock.json
+
+# --- Python ---
+__pycache__/
+*.pyc
+*.pyo
+*tempCodeRunnerFile.*
+
+# --- Local data ---
+uploads/
+recordings/
+Project/
+TODO.md
+
+# --- External tools ---
+act
+
+# --- Binaries ---
+ffmpeg
+ffprobe
+ffplay
+
+# --- Legacy ---
+experimental/
+main/mycpp/
+
+# --- Workspace-specific ---
 /workspaces/VOT-Denpasar/push
-experimental
-main/.env
-main/ffmpeg
-main/ffprobe
-main/ffplay
-main/mycpp
-main/mycpp/.env
-*.exe

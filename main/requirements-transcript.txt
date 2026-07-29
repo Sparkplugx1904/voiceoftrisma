@@ -1,0 +1,12 @@
+# Transcription dependencies (Whisper-CPP)
+# Digunakan oleh: transcriptor_cpp.py, descriptor.py, ia.py
+requests
+urllib3
+internetarchive
+python-dotenv
+numpy
+google-genai
+pydub
+noisereduce
+scipy
+free-proxy
