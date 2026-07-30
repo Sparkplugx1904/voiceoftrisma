@@ -6,9 +6,11 @@ Menggantikan baris-baris curl/pip/apt di GitHub Actions workflows
 dengan satu perintah Python.
 
 Usage:
-  python setup.py --record record_v1.0.py    # Setup environment untuk recording (v1)
-  python setup.py --record record_v2.0.py    # Setup environment untuk recording (v2)
-  python setup.py transcript                 # Setup environment untuk transkripsi
+  python setup.py record              # Setup environment recording (default: record_v1.0.py)
+  python setup.py record record_v2.0.py  # Setup dengan script kustom
+  python setup.py transcript           # Setup environment transkripsi
+  python setup.py hybrid               # Setup record + transkripsi (default: record_v1.0.py)
+  python setup.py hybrid record_v2.0.py  # Hybrid dengan script kustom
 """
 
 import argparse
@@ -248,36 +250,26 @@ def main():
         description="VoT setup utility — install dependencies untuk recording / transkripsi.",
     )
     parser.add_argument(
-        "--record",
-        metavar="SCRIPT",
-        help="Setup environment recording (contoh: record_v1.0.py atau record_v2.0.py)",
+        "mode",
+        choices=["record", "transcript", "hybrid"],
+        help="Mode: 'record' (rekam), 'transcript' (transkripsi), atau 'hybrid' (keduanya)",
     )
     parser.add_argument(
-        "mode",
+        "record_script",
         nargs="?",
-        choices=["transcript", "hybrid"],
-        help="'transcript' = transkripsi saja, 'hybrid' = record + transkripsi (default record_v1.0.py)",
+        default="record_v1.0.py",
+        help="Nama file script record (default: record_v1.0.py). Contoh: record_v2.0.py",
     )
 
     args = parser.parse_args()
 
-    if args.record and args.mode != "hybrid":
-        setup_record(args.record)
-    if args.mode == "transcript":
+    if args.mode == "record":
+        setup_record(args.record_script)
+    elif args.mode == "transcript":
         setup_transcript()
     elif args.mode == "hybrid":
-        record_script = args.record or "record_v1.0.py"
-        setup_record(record_script)
+        setup_record(args.record_script)
         setup_transcript()
-
-    if not args.record and not args.mode:
-        parser.error("butuh --record <SCRIPT>, 'transcript', atau 'hybrid'.\n"
-                      "Contoh:\n"
-                      "  python setup.py --record record_v1.0.py\n"
-                      "  python setup.py --record record_v2.0.py\n"
-                      "  python setup.py transcript\n"
-                      "  python setup.py hybrid\n"
-                      "  python setup.py hybrid --record record_v2.0.py")
 
 
 if __name__ == "__main__":
