@@ -1,6 +1,5 @@
 # Transcription dependencies (Whisper-CPP + AI)
 # Digunakan oleh: transcriptor_cpp.py, descriptor.py, ia.py
--r base.txt
 numpy
 google-genai
 pydub
@@ -8,3 +7,4 @@ noisereduce
 scipy
 free-proxy
 pydantic
+internetarchive

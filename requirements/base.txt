@@ -1,5 +1,0 @@
-# Core dependencies — digunakan oleh semua mode
-requests
-urllib3
-internetarchive
-python-dotenv
