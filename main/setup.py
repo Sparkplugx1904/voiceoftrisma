@@ -255,22 +255,29 @@ def main():
     parser.add_argument(
         "mode",
         nargs="?",
-        choices=["transcript"],
-        help="Setup environment transkripsi",
+        choices=["transcript", "hybrid"],
+        help="'transcript' = transkripsi saja, 'hybrid' = record + transkripsi (default record_v1.0.py)",
     )
 
     args = parser.parse_args()
 
-    if args.record:
+    if args.record and args.mode != "hybrid":
         setup_record(args.record)
-    elif args.mode == "transcript":
+    if args.mode == "transcript":
         setup_transcript()
-    else:
-        parser.error("butuh --record <SCRIPT> atau 'transcript'.\n"
+    elif args.mode == "hybrid":
+        record_script = args.record or "record_v1.0.py"
+        setup_record(record_script)
+        setup_transcript()
+
+    if not args.record and not args.mode:
+        parser.error("butuh --record <SCRIPT>, 'transcript', atau 'hybrid'.\n"
                       "Contoh:\n"
                       "  python setup.py --record record_v1.0.py\n"
                       "  python setup.py --record record_v2.0.py\n"
-                      "  python setup.py transcript")
+                      "  python setup.py transcript\n"
+                      "  python setup.py hybrid\n"
+                      "  python setup.py hybrid --record record_v2.0.py")
 
 
 if __name__ == "__main__":
