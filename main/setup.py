@@ -129,6 +129,7 @@ def setup_record(script: str):
         download(f"{GH_BASE}/bin/ffmpeg", "ffmpeg")
         download(f"{GH_BASE}/bin/ffprobe", "ffprobe")
         download(f"{RAW_BASE}/requirements/record.txt", "requirements.txt")
+        download(f"{RAW_BASE}/requirements/base.txt", "base.txt")
     except RuntimeError as exc:
         print(f"\n❌  Record setup gagal: {exc}")
         print("  ·  Job tidak bisa lanjut tanpa file-file ini.")
