@@ -32,7 +32,7 @@ jobs:
         env:
           MY_ACCESS_KEY: ${{ secrets.MY_ACCESS_KEY }}
           MY_SECRET_KEY: ${{ secrets.MY_SECRET_KEY }}
-        run: python record_v1.0.py ${{ matrix.suffix }}
+        run: python main/record_v1.0.py ${{ matrix.suffix }}
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4

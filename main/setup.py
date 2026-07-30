@@ -6,11 +6,10 @@ Menggantikan baris-baris curl/pip/apt di GitHub Actions workflows
 dengan satu perintah Python.
 
 Usage:
-  python setup.py record              # Setup environment recording (default: record_v1.0.py)
-  python setup.py record record_v2.0.py  # Setup dengan script kustom
+  python setup.py record              # Setup environment recording (ffmpeg + pip)
   python setup.py transcript           # Setup environment transkripsi
-  python setup.py hybrid               # Setup record + transkripsi (default: record_v1.0.py)
-  python setup.py hybrid record_v2.0.py  # Hybrid dengan script kustom
+  python setup.py hybrid               # Setup record + transkripsi
+  # Script rekaman (record_v1.0.py / record_v2.0.py) di-download oleh workflow sendiri.
 """
 
 import argparse
@@ -23,7 +22,6 @@ import time
 import urllib.request
 from urllib.error import HTTPError, URLError
 
-RAW_BASE = "https://raw.githubusercontent.com/Sparkplugx1904/voiceoftrisma/main"
 GH_BASE = "https://github.com/Sparkplugx1904/voiceoftrisma/raw/refs/heads/main"
 
 
@@ -113,22 +111,17 @@ def run(args: list[str], **kwargs):
 # ── record ─────────────────────────────────────────────────────────────────
 
 
-def setup_record(script: str):
+def setup_record():
     """
     Setup untuk job "Record Stream and Upload".
 
-    Download script rekaman, ffmpeg, ffprobe, requirements.txt,
-    chmod +x, pip install.
-
-    Semua download punya retry + validasi otomatis.
-    Jika gagal → pesan jelas, bukan traceback mentah.
+    Download ffmpeg & ffprobe, chmod +x, pip install requirements record.
+    Script rekaman (record_v1.0.py / record_v2.0.py) di-download oleh workflow sendiri.
     """
-    print(f"\n── Setup record ({script}) ──\n")
+    print("\n── Setup record ──\n")
 
-    # ── Download yang dibutuhkan ──
-    # (record script di-download ke CWD, ffmpeg/ffprobe dari rilis — repo checkout sudah punya requirements/)
+    # ── Download ffmpeg & ffprobe ──
     try:
-        download(f"{RAW_BASE}/main/{script}", script)
         download(f"{GH_BASE}/bin/ffmpeg", "ffmpeg")
         download(f"{GH_BASE}/bin/ffprobe", "ffprobe")
     except RuntimeError as exc:
@@ -151,7 +144,7 @@ def setup_record(script: str):
         print("  ·  Coba manual: pip install -r requirements/record.txt\n")
         sys.exit(1)
 
-    print(f"\n✓  Setup record ({script}) selesai.\n")
+    print("\n✓  Setup record selesai.\n")
 
 
 # ── ffmpeg installer (menggantikan 3x Setup FFmpeg di YAML) ────────────────
@@ -254,21 +247,15 @@ def main():
         choices=["record", "transcript", "hybrid"],
         help="Mode: 'record' (rekam), 'transcript' (transkripsi), atau 'hybrid' (keduanya)",
     )
-    parser.add_argument(
-        "record_script",
-        nargs="?",
-        default="record_v1.0.py",
-        help="Nama file script record (default: record_v1.0.py). Contoh: record_v2.0.py",
-    )
 
     args = parser.parse_args()
 
     if args.mode == "record":
-        setup_record(args.record_script)
+        setup_record()
     elif args.mode == "transcript":
         setup_transcript()
     elif args.mode == "hybrid":
-        setup_record(args.record_script)
+        setup_record()
         setup_transcript()
 
 

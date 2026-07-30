@@ -34,7 +34,7 @@ jobs:
           python-version: '3.x'
 
       - name: Setup recording environment
-        run: python main/setup.py record record_v2.0.py
+        run: python main/setup.py record
 
       - name: Run recorder (auto-export ENV)
         id: record
@@ -49,7 +49,7 @@ jobs:
 
         run: |
           mkdir -p recordings
-          python3 -u record_v2.0.py ${{ matrix.suffix }}
+          python3 -u main/record_v2.0.py ${{ matrix.suffix }}
 
       - name: Map environment vars to matrix outputs
         id: map

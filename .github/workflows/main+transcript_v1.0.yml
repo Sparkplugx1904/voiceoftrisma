@@ -48,7 +48,7 @@ jobs:
 
         run: |
           mkdir -p recordings
-          python3 -u record_v1.0.py ${{ matrix.suffix }} 
+          python3 -u main/record_v1.0.py ${{ matrix.suffix }}
 
       - name: Map environment vars to matrix outputs
         id: map
