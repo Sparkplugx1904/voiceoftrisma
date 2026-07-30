@@ -21,26 +21,20 @@ jobs:
       id_s1p1:  ${{ steps.map.outputs.id_s1p1 }}
 
     steps:
+      - uses: actions/checkout@v4
+
       # - name: Setup Cloudflare WARP
       #   uses: fscarmen/warp-on-actions@v1.4
       #   with:
       #     stack: dual
-
-      - name: Download Python recorder & FFmpeg
-        run: |
-          curl -L -o record_v2.0.py https://raw.githubusercontent.com/Sparkplugx1904/voiceoftrisma/main/main/record_v2.0.py
-          curl -L -o ffmpeg https://github.com/Sparkplugx1904/voiceoftrisma/raw/refs/heads/main/bin/ffmpeg
-          curl -L -o ffprobe https://github.com/Sparkplugx1904/voiceoftrisma/raw/refs/heads/main/bin/ffprobe
-          curl -L -o requirements.txt https://raw.githubusercontent.com/Sparkplugx1904/voiceoftrisma/main/requirements/record.txt
-          chmod +x ffmpeg ffprobe
 
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.x'
 
-      - name: Install dependencies
-        run: pip install -r requirements.txt
+      - name: Setup recording environment
+        run: python main/setup.py --record record_v2.0.py
 
       - name: Run recorder (auto-export ENV)
         id: record
@@ -55,7 +49,7 @@ jobs:
 
         run: |
           mkdir -p recordings
-          python3 -u record_v2.0.py ${{ matrix.suffix }} 
+          python3 -u record_v2.0.py ${{ matrix.suffix }}
 
       - name: Map environment vars to matrix outputs
         id: map
@@ -87,31 +81,20 @@ jobs:
           - { suffix: "s1p1", url: "${{ needs.record.outputs.url_s1p1 }}", item: "${{ needs.record.outputs.id_s1p1 }}" }
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
         with:
-          repository: Sparkplugx1904/Whisper-CPP
+          python-version: '3.x'
 
-      #3 Tumpukan perintah di bawah tidak boleh di ubah oleh alasan apapun bentuknya, apapun alasannya.
-      - name: Setup FFmpeg
-        uses: FedericoCarboni/setup-ffmpeg@v3
-        continue-on-error: true
-      - name: Setup FFmpeg
-        uses: FedericoCarboni/setup-ffmpeg@v3
-        continue-on-error: true
-      - name: Setup FFmpeg
-        uses: FedericoCarboni/setup-ffmpeg@v3
-        continue-on-error: true
-
-      - name: Install dependencies
-        run: |
-          pip install -r requirements.txt
-          sudo apt install -y internetarchive
+      - name: Setup transcription environment
+        run: python main/setup.py transcript
 
       - name: Transcribe audio
         run: |
           echo "[ INFO ] Transcribing audio_${{ matrix.pair.suffix }}.mp3..."
-          python3 -u transcriptor_cpp.py "${{ matrix.pair.url }}" medium
+          python3 -u main/transcriptor_cpp.py "${{ matrix.pair.url }}" medium
 
       - name: Upload transcript artifact
         uses: actions/upload-artifact@v4
@@ -126,5 +109,5 @@ jobs:
           ITEM_ID: ${{ matrix.pair.item }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: |
-          python descriptor.py transcripts/transcript.srt -o transcripts/description.json
-          python3 -u ia.py
+          python main/descriptor.py transcripts/transcript.srt -o transcripts/description.json
+          python3 -u main/ia.py

@@ -7,3 +7,4 @@ pydub
 noisereduce
 scipy
 free-proxy
+pydantic

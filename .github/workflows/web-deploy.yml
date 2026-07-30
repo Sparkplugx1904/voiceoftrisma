@@ -1,59 +1,57 @@
-name: Auto Deploy (Sparse Checkout Method)
+name: 🚀 Deploy to GitHub Pages
 
 on:
   push:
     branches:
       - main
   workflow_dispatch:
+  schedule:
+    - cron: "15 23 * * *"   # Tiap hari jam 23:15 UTC (~07:15 WITA)
+    - cron: "30 7 * * *"    # Tiap hari jam 07:30 UTC (~15:30 WITA)
 
 jobs:
   deploy:
+    name: 🚀 Deploy from main to web
     runs-on: ubuntu-latest
-
     steps:
-      # 1. Sparse Checkout untuk mengambil folder template/0 dan file spesifik lainnya
-      - name: Checkout Source Template
+      - name: Checkout source repo
+        uses: actions/checkout@v4
+        with:
+          path: source
+
+      - name: Checkout template
         uses: actions/checkout@v4
         with:
           repository: Sparkplugx1904/voiceoftrisma
-          path: source_repo
           sparse-checkout: |
             template/main
-            LICENSE
-            README.md
-            template/sitemap.xml
-            template/robots.txt
-          sparse-checkout-cone-mode: false
+            bin
+          path: template
 
-      - name: Setup Git identity
+      - name: Setup and deploy
+        env:
+          WEB_TOKEN_SECRET: ${{ secrets.WEB_TOKEN }}
         run: |
-          git config --global user.name "mp@bot"
-          git config --global user.email "mp@bot@noreply.github.com"
+          set -e
 
-      # 2. Clone Target Repo
-      - name: Clone web repo
-        run: |
-          git clone https://x-access-token:${{ secrets.WEB_TOKEN }}@github.com/voiceoftrisma/voiceoftrisma.github.io.git web
+          echo "[ 1 / 5 ] Siapkan direktori web..."
+          mkdir -p web
+          ls -la template/
 
-      # 3. Pindahkan Isi Folder
-      - name: Sync and Clean
-        run: |
-          # Bersihkan repo target
-          rm -rf web/*
-          
-          # Pindahkan isi dari template/main ke root web
-          cp -r source_repo/template/main/* web/
-          
-          # Pindahkan file individu ke root web
-          cp source_repo/LICENSE web/
-          cp source_repo/README.md web/
-          cp source_repo/template/sitemap.xml web/
-          cp source_repo/template/robots.txt web/
+          echo "[ 2 / 5 ] Pindahkan template deploy..."
+          rsync -av --delete template/template/main/ web/ || cp -r template/template/main/* web/
 
-      # 4. Push ke Target
-      - name: Commit and push
-        run: |
-          cd web
-          git add .
-          git commit -m "Auto deploy via Sparse Checkout at $(date)" || echo "No changes"
-          git push origin main
+          echo "[ 3 / 5 ] Moved:"
+          ls -la web/
+
+          echo "[ 4 / 5 ] Clone web repo..."
+          git clone "https://x-access-token:${WEB_TOKEN_SECRET}@github.com/voiceoftrisma/voiceoftrisma.github.io.git" web-repo
+          rsync -av --delete web/ web-repo/
+
+          echo "[ 5 / 5 ] Push to web repo..."
+          cd web-repo
+          git config user.name "VoT Deploy Bot"
+          git config user.email "deploy@voiceoftrisma.radio"
+          git add -A
+          git diff-index --quiet HEAD || git commit -m "Auto-deploy $(date -u +'%Y-%m-%d %H:%M UTC')"
+          git push
