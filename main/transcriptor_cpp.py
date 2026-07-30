@@ -14,7 +14,7 @@ try:
     import numpy as np
 except ImportError as e:
     print(f"[✗✗✗] FATAL: GAGAL MENGIMPOR PUSTAKA PENTING: {e}", file=sys.stderr)
-    print("[✗✗✗] FATAL: Pastikan Anda telah menjalankan 'pip install -r requirements.txt' (minimal numpy)", file=sys.stderr)
+    print("[✗✗✗] FATAL: Pastikan Anda telah menjalankan 'pip install -r requirements/transcript.txt' (minimal numpy)", file=sys.stderr)
     sys.exit(1)
 
 # --- Sistem Logging Kustom Sederhana ---
