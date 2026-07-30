@@ -123,13 +123,12 @@ def setup_record(script: str):
     """
     print(f"\n── Setup record ({script}) ──\n")
 
-    # ── Download semua yang dibutuhkan ──
+    # ── Download yang dibutuhkan ──
+    # (record script di-download ke CWD, ffmpeg/ffprobe dari rilis — repo checkout sudah punya requirements/)
     try:
         download(f"{RAW_BASE}/main/{script}", script)
         download(f"{GH_BASE}/bin/ffmpeg", "ffmpeg")
         download(f"{GH_BASE}/bin/ffprobe", "ffprobe")
-        download(f"{RAW_BASE}/requirements/record.txt", "requirements.txt")
-        download(f"{RAW_BASE}/requirements/base.txt", "base.txt")
     except RuntimeError as exc:
         print(f"\n❌  Record setup gagal: {exc}")
         print("  ·  Job tidak bisa lanjut tanpa file-file ini.")
@@ -142,9 +141,9 @@ def setup_record(script: str):
             os.chmod(bin_name, os.stat(bin_name).st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
             print(f"  ✓  chmod +x {bin_name}")
 
-    # ── pip install ──
+    # ── pip install (dari requirements/ di checkout repo) ──
     try:
-        run([sys.executable, "-m", "pip", "install", "-r", "requirements.txt"])
+        run([sys.executable, "-m", "pip", "install", "-r", "requirements/record.txt"])
     except subprocess.CalledProcessError:
         print("\n❌  pip install gagal.")
         print("  ·  Coba manual: pip install -r requirements/record.txt\n")
