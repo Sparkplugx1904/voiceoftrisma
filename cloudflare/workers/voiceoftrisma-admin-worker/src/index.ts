@@ -370,14 +370,13 @@ async function handleLogin(request: Request, env: Env): Promise<Response> {
 	const passOk = await secureEqual(password, env.ADMIN_PASSWORD);
 
 	if (!userOk || !passOk) {
-		await appendLog(env, "login_failed", {
-			ip: request.headers.get("CF-Connecting-IP") || "unknown",
-		});
+		// Login GAGAL tidak dicatat ke KV: log permanen hanya untuk aksi kritis
+		// (simpan/restore jadwal) supaya kuota put harian tidak terkuras percobaan login.
+		// Proteksi brute-force tetap aktif via checkRateLimit (in-memory).
 		return json({ error: "Username atau password salah." }, 401);
 	}
 
 	const token = await signToken(env, username);
-	await appendLog(env, "login", { user: username });
 	return json({ token, expires_in: TOKEN_TTL_SECONDS, user: username });
 }
 
@@ -399,8 +398,19 @@ async function handlePutJadwal(request: Request, env: Env): Promise<Response> {
 	const result = validateJadwalDoc(raw);
 	if (!result.ok) return json({ error: result.error }, 400);
 
-	// Simpan versi lama ke riwayat sebelum di-overwrite (undo).
+	// Dedupe: isi sama persis dengan yang tersimpan → tidak ada perubahan nyata,
+	// skip tulis utama & riwayat (hemat kuota put KV).
 	const current = await kvGetJadwal(env);
+	if (JSON.stringify(current) === JSON.stringify(result.doc)) {
+		return json({
+			ok: true,
+			saved_at: new Date().toISOString(),
+			message: "Tidak ada perubahan — jadwal tidak ditulis ulang.",
+			jadwal: result.doc,
+		});
+	}
+
+	// Simpan versi lama ke riwayat sebelum di-overwrite (undo).
 	await pushHistory(env, current);
 
 	// Tulis utama: kalau gagal (mis. kuota KV put harian habis), beri pesan jelas.

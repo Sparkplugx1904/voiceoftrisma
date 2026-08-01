@@ -94,7 +94,11 @@ export function mergeSample(samples: Sample[], now: number, listeners: number, s
 	return samples;
 }
 
-/* Catat satu sample ke KV (dedupe per bucket 5 menit, trim 6 jam). */
+/* Catat satu sample ke KV (dedupe per bucket 5 menit, trim 6 jam).
+   HEMAT KUOTA PUT: (a) skip tulis samples jika nilai tidak berubah dalam
+   bucket yang sama — tidak ada informasi baru; bucket BARU tetap ditulis
+   karena grafik butuh titik waktu. (b) snapshot mentah "last" hanya
+   ditulis jika isinya benar-benar berubah (bandingkan string JSON). */
 async function recordSample(env: Env): Promise<void> {
 	const data = await fetchIcecast();
 	if (!data) return;
@@ -103,10 +107,23 @@ async function recordSample(env: Env): Promise<void> {
 	const listeners = toNumber(data.currentlisteners);
 	const status = data.streamstatus === 1 || String(data.streamstatus) === "1" ? 1 : 0;
 
-	const samples = mergeSample(await getSamples(env), now, listeners, status);
+	const prevSamples = await getSamples(env);
+	const prevLast = prevSamples[prevSamples.length - 1];
+	const samples = mergeSample(prevSamples, now, listeners, status);
 
-	await env.VOT_STREAM_STATS.put(KV_KEY_SAMPLES, JSON.stringify(samples));
-	await env.VOT_STREAM_STATS.put(KV_KEY_LAST, JSON.stringify(data));
+	const sameBucket =
+		prevLast !== undefined && Math.floor(prevLast[0] / BUCKET_SECONDS) === Math.floor(now / BUCKET_SECONDS);
+	const valueUnchanged = prevLast !== undefined && prevLast[1] === listeners && prevLast[2] === status;
+
+	if (!(sameBucket && valueUnchanged)) {
+		await env.VOT_STREAM_STATS.put(KV_KEY_SAMPLES, JSON.stringify(samples));
+	}
+
+	const rawLast = await env.VOT_STREAM_STATS.get(KV_KEY_LAST);
+	const newLast = JSON.stringify(data);
+	if (rawLast !== newLast) {
+		await env.VOT_STREAM_STATS.put(KV_KEY_LAST, newLast);
+	}
 }
 
 export default {
