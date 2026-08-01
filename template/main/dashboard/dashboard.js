@@ -671,11 +671,14 @@
 
         // Garis pendengar
         var line = samples.map(function (s) { return x(s[0]) + ',' + y(s[1]); }).join(' ');
-        // Titik data
+        // Titik data + area hover transparan (r=9) untuk tooltip
         var dots = samples.map(function (s) {
             var on = s[2] === 1;
-            return '<circle cx="' + x(s[0]) + '" cy="' + y(s[1]) + '" r="2.5" class="' +
-                (on ? 'chart-dot' : 'chart-dot-off') + '"/>';
+            return '<g class="chart-hit" data-t="' + s[0] + '" data-l="' + s[1] + '" data-s="' + s[2] + '">' +
+                '<circle cx="' + x(s[0]) + '" cy="' + y(s[1]) + '" r="9" fill="transparent" class="chart-hit-area"/>' +
+                '<circle cx="' + x(s[0]) + '" cy="' + y(s[1]) + '" r="2.5" class="' +
+                (on ? 'chart-dot' : 'chart-dot-off') + '"/>' +
+                '</g>';
         }).join('');
 
         var ns = 'http://www.w3.org/2000/svg';
@@ -695,6 +698,7 @@
 
         wrap.innerHTML = '';
         wrap.appendChild(svg);
+        initChartTooltip(wrap);
 
         // Ringkasan statistik
         var peak = Math.max.apply(null, values);
@@ -709,6 +713,54 @@
     function setText(id, text) {
         var el = document.getElementById(id);
         if (el) el.textContent = text;
+    }
+
+    /* ---------------- Tooltip grafik ---------------- */
+
+    /* Tooltip detail titik grafik: muncul di dekat kursor (offset 16px kanan-bawah,
+       flip ke kiri/atas kalau mepet tepi) sehingga TIDAK menutupi titik yang
+       ditunjuk. pointer-events: none supaya tooltip tidak menangkap hover. */
+    function initChartTooltip(wrap) {
+        var tip = document.getElementById('chartTooltip');
+        if (!tip) {
+            tip = document.createElement('div');
+            tip.id = 'chartTooltip';
+            tip.className = 'chart-tooltip';
+            wrap.appendChild(tip);
+        }
+        var svg = wrap.querySelector('.chart-svg');
+        if (!svg) return;
+
+        svg.addEventListener('pointermove', function (e) {
+            var hit = e.target && e.target.closest ? e.target.closest('.chart-hit') : null;
+            if (!hit) {
+                tip.classList.remove('visible');
+                return;
+            }
+            var t = parseInt(hit.getAttribute('data-t'), 10);
+            var l = parseInt(hit.getAttribute('data-l'), 10);
+            var s = parseInt(hit.getAttribute('data-s'), 10);
+            var d = new Date(t * 1000);
+            var hh = String(d.getHours()).padStart(2, '0');
+            var mm = String(d.getMinutes()).padStart(2, '0');
+            tip.innerHTML =
+                '<div class="tt-time">' + hh + ':' + mm + '</div>' +
+                '<div>Pendengar: <strong>' + l + '</strong></div>' +
+                '<div class="tt-status">' + (s === 1 ? 'Streaming' : 'Offline') + '</div>';
+            tip.classList.add('visible');
+
+            var r = svg.getBoundingClientRect();
+            var x = e.clientX - r.left + 16;
+            var y = e.clientY - r.top + 16;
+            if (x + tip.offsetWidth > r.width - 4) x = e.clientX - r.left - tip.offsetWidth - 16;
+            if (y + tip.offsetHeight > r.height - 4) y = e.clientY - r.top - tip.offsetHeight - 16;
+            tip.style.left = Math.max(4, x) + 'px';
+            tip.style.top = Math.max(4, y) + 'px';
+        });
+
+        svg.addEventListener('pointerleave', function () {
+            tip.classList.remove('visible');
+        });
     }
 
     /* ---------------- Preview (mode lihat) ---------------- */

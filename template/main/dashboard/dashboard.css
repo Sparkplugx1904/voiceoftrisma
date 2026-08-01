@@ -713,6 +713,7 @@ body > * {
 .chart-wrap {
     width: 100%;
     overflow-x: auto;
+    position: relative;
 }
 
 .chart-empty {
@@ -764,6 +765,41 @@ body > * {
 .chart-dot-off {
     fill: var(--text-muted);
     opacity: 0.5;
+}
+
+/* Area hover transparan tiap titik — kursor pointer */
+.chart-hit-area {
+    cursor: pointer;
+}
+
+/* Tooltip detail titik: mengikuti kursor, tidak menangkap pointer */
+.chart-tooltip {
+    position: absolute;
+    z-index: 50;
+    display: none;
+    pointer-events: none;
+    background: rgba(12, 14, 22, 0.96);
+    border: 1px solid var(--glass-border);
+    border-radius: 8px;
+    padding: 6px 10px;
+    font-size: 0.78rem;
+    line-height: 1.5;
+    color: var(--text-main);
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.45);
+    white-space: nowrap;
+}
+
+.chart-tooltip.visible {
+    display: block;
+}
+
+.chart-tooltip .tt-time {
+    color: var(--accent);
+    font-weight: 600;
+}
+
+.chart-tooltip .tt-status {
+    opacity: 0.75;
 }
 
 /* ---------- Preview ---------- */
