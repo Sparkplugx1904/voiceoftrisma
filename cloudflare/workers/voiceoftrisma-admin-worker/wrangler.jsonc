@@ -1,0 +1,28 @@
+/**
+ * For more details on how to configure Wrangler, refer to:
+ * https://developers.cloudflare.com/workers/wrangler/configuration/
+ */
+{
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "voiceoftrisma-admin-worker",
+	"main": "src/index.ts",
+	"compatibility_date": "2026-05-02",
+	"compatibility_flags": ["nodejs_compat"],
+	"observability": {
+		"enabled": true
+	},
+	"upload_source_maps": true,
+	"kv_namespaces": [
+		{
+			"binding": "VOT_ADMIN_STORE",
+			"id": "1f540e7af26b4142a81a34f6bf5d3d4e"
+		}
+	]
+	/**
+	 * Secrets (set via: npx wrangler secret put <NAMA>)
+	 * - ADMIN_USERNAME  : username admin (mis. mpvot)
+	 * - ADMIN_PASSWORD  : password admin
+	 * - SESSION_SECRET  : kunci rahasia untuk menandatangani token sesi
+	 *                     (generate: openssl rand -base64 32)
+	 */
+}

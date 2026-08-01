@@ -136,3 +136,29 @@ svgImages.forEach(img => {
         .catch(err => console.error("Gagal memuat file SVG:", err));
 });
 
+// ============================================
+// AKSES RAHASIA ADMIN: klik logo 5x dalam 3 detik
+// -> diarahkan ke halaman login admin.
+// Pakai event delegation supaya tetap bekerja
+// meski <img> logo sudah diganti jadi <svg> inline.
+// ============================================
+(function () {
+    const SECRET_CLICKS = 5;
+    const SECRET_WINDOW_MS = 3000;
+    let clickTimes = [];
+
+    document.addEventListener('click', function (e) {
+        const logo = e.target.closest('.logo-sidebar, .logo-main');
+        if (!logo) return;
+
+        const now = Date.now();
+        clickTimes = clickTimes.filter(t => now - t <= SECRET_WINDOW_MS);
+        clickTimes.push(now);
+
+        if (clickTimes.length >= SECRET_CLICKS) {
+            clickTimes = [];
+            window.location.href = base + 'login';
+        }
+    });
+})();
+
