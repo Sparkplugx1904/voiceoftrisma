@@ -463,11 +463,6 @@ body.sidebar-toggled .audio-player-bar {
     background: rgba(255, 255, 255, 0.05);
 }
 
-/* Tombol jadwal popup di baris player — rata kanan */
-.jadwal-player-btn {
-    margin-left: auto;
-}
-
 .play-pause-btn {
     background: var(--text-main);
     border: none;

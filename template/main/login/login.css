@@ -178,6 +178,24 @@ body::before {
     transform: scale(1.03);
 }
 
+/* Saat light-theme aktif, elemen logo berwarna putih diubah menjadi hitam
+   (sama seperti sistem di main/style.css .vot-logo-svg). */
+.login-logo * {
+    transition: fill 0.3s ease, stroke 0.3s ease;
+}
+
+body.light-theme .login-logo [fill="#FFFFFF"],
+body.light-theme .login-logo [fill="#ffffff"],
+body.light-theme .login-logo [fill="white"] {
+    fill: #000000 !important;
+}
+
+body.light-theme .login-logo [stroke="#FFFFFF"],
+body.light-theme .login-logo [stroke="#ffffff"],
+body.light-theme .login-logo [stroke="white"] {
+    stroke: #000000 !important;
+}
+
    FORM
    ========================================= */
 .form-group {

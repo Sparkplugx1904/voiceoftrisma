@@ -42,6 +42,9 @@ const navbarHTML = `
         <img src="${base}assets/madyapadma-voice-of-trisma-origin.svg" alt="Logo Madyapadma"
             class="logo-main hidden-desktop">
         <div class="search-container">
+            <button type="button" class="icon-btn jadwal-search-btn" id="jadwalSearchBtn" title="Jadwal Siaran">
+                <i class="fa-solid fa-calendar-days"></i>
+            </button>
             <div class="search-box">
                 <i class="fa fa-search search-icon"></i>
                 <input type="text" id="q" placeholder="Cari tanggal atau ID... (mis. 29-08-25)">
@@ -337,10 +340,10 @@ svgImages.forEach(img => {
         if (overlay && overlay.classList.contains('open')) updateJadwalNow();
     }, 60000);
 
-    // Tombol "Jadwal" di baris player (halaman utama)
-    const jadwalPlayerBtn = document.getElementById('jadwalPlayerBtn');
-    if (jadwalPlayerBtn) {
-        jadwalPlayerBtn.addEventListener('click', function (e) {
+    // Tombol "Jadwal" di navbar, samping kiri kotak pencarian (semua halaman)
+    const jadwalSearchBtn = document.getElementById('jadwalSearchBtn');
+    if (jadwalSearchBtn) {
+        jadwalSearchBtn.addEventListener('click', function (e) {
             e.preventDefault();
             openJadwalModal();
         });

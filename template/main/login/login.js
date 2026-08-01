@@ -38,6 +38,32 @@
         });
     }
 
+    /* ---------- LOGO IKUT TEMA (sama seperti load-layout.js di main) ----------
+       <img> logo di-fetch jadi SVG inline ber-class 'vot-logo-svg',
+       supaya CSS body.light-theme bisa menukar fill/stroke putih -> hitam. */
+    var svgImages = document.querySelectorAll('img[src*="voice-of-trisma"]');
+    svgImages.forEach(function (img) {
+        var imgID = img.id;
+        var imgClass = img.className;
+        var imgURL = img.src;
+
+        fetch(imgURL)
+            .then(function (res) { return res.text(); })
+            .then(function (text) {
+                var parser = new DOMParser();
+                var xmlDoc = parser.parseFromString(text, 'text/xml');
+                var svg = xmlDoc.getElementsByTagName('svg')[0];
+                if (!svg) return;
+
+                if (imgID) svg.setAttribute('id', imgID);
+                if (imgClass) svg.setAttribute('class', imgClass + ' inline-svg');
+
+                svg.classList.add('vot-logo-svg');
+                img.replaceWith(svg);
+            })
+            .catch(function (err) { console.error('Gagal memuat file SVG:', err); });
+    });
+
     /* ---------- SHOW / HIDE PASSWORD ---------- */
     var passwordInput = document.getElementById('password');
     var passwordToggle = document.getElementById('passwordToggle');

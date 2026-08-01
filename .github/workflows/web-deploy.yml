@@ -46,7 +46,9 @@ jobs:
 
           echo "[ 4 / 5 ] Clone web repo..."
           git clone "https://x-access-token:${WEB_TOKEN_SECRET}@github.com/voiceoftrisma/voiceoftrisma.github.io.git" web-repo
-          rsync -av --delete web/ web-repo/
+          # --exclude=.git/ PENTING: sumber (web/) bukan git repo, tanpa ini
+          # rsync --delete ikut menghapus .git/ web-repo -> push jadi "not in a git directory"
+          rsync -av --delete --exclude=.git/ web/ web-repo/
 
           echo "[ 5 / 5 ] Push to web repo..."
           cd web-repo
