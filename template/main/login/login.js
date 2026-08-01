@@ -150,9 +150,9 @@
                 store.setItem('vot_admin_token', result.data.token);
                 store.setItem('vot_admin_user', result.data.user || username);
 
-                // Redirect: ke halaman tujuan (dashboard) atau beranda
+                // Redirect: ke halaman tujuan (dashboard) atau dashboard default
                 var next = new URLSearchParams(window.location.search).get('next');
-                window.location.href = next || '../';
+                window.location.href = next || '../dashboard/';
             })
             .catch(function () {
                 showFormError('Tidak dapat terhubung ke server. Periksa koneksi internet.');

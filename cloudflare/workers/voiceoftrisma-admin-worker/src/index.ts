@@ -41,9 +41,13 @@ type JadwalDoc = Record<string, JadwalItem[]>;
 /* ---------------- Konstanta ---------------- */
 
 const KV_KEY_JADWAL = "jadwal";
+const KV_KEY_HISTORY = "jadwal_history";
+const KV_KEY_LOGS = "admin_logs";
 const TOKEN_TTL_SECONDS = 7 * 24 * 3600; // token berlaku 7 hari
 const LOGIN_MAX_ATTEMPTS = 5; // percobaan login gagal per jendela waktu
 const LOGIN_WINDOW_MS = 10 * 60 * 1000; // 10 menit
+const HISTORY_MAX = 5; // riwayat jadwal: maksimal 5 versi terakhir
+const LOGS_MAX = 100; // log aktivitas admin: maksimal 100 entri
 
 const TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
 const DAY_KEYS = ["0", "1", "2", "3", "4", "5", "6"];
@@ -225,6 +229,44 @@ async function kvSetJson(env: Env, key: string, value: unknown): Promise<void> {
 	await env.VOT_ADMIN_STORE.put(key, JSON.stringify(value));
 }
 
+/* ---------------- Riwayat jadwal & log aktivitas ---------------- */
+
+interface HistoryEntry {
+	saved_at: string;
+	jadwal: JadwalDoc;
+}
+
+/* Simpan versi sekarang ke riwayat (index 0 = terbaru), potong ke HISTORY_MAX.
+   BEST-EFFORT: riwayat tidak boleh menggagalkan simpan jadwal utama. */
+async function pushHistory(env: Env, doc: JadwalDoc): Promise<void> {
+	try {
+		const history = ((await kvGetJson(env, KV_KEY_HISTORY)) || []) as HistoryEntry[];
+		history.unshift({ saved_at: new Date().toISOString(), jadwal: doc });
+		while (history.length > HISTORY_MAX) history.pop();
+		await kvSetJson(env, KV_KEY_HISTORY, history);
+	} catch (e) {
+		console.error("pushHistory gagal (best-effort):", e);
+	}
+}
+
+/* Catat log aktivitas admin (index 0 = terbaru), potong ke LOGS_MAX.
+   BEST-EFFORT: kegagalan KV (mis. kuota put harian habis) TIDAK boleh
+   menggagalkan request inti (login/simpan) — log hanya catatan sekunder. */
+async function appendLog(env: Env, action: string, detail?: unknown): Promise<void> {
+	try {
+		const logs = ((await kvGetJson(env, KV_KEY_LOGS)) || []) as Array<{
+			t: string;
+			action: string;
+			detail: unknown;
+		}>;
+		logs.unshift({ t: new Date().toISOString(), action, detail: detail ?? null });
+		while (logs.length > LOGS_MAX) logs.pop();
+		await kvSetJson(env, KV_KEY_LOGS, logs);
+	} catch (e) {
+		console.error("appendLog gagal (best-effort):", e);
+	}
+}
+
 async function kvGetJadwal(env: Env): Promise<JadwalDoc> {
 	const raw = await kvGetJson(env, KV_KEY_JADWAL);
 	if (raw && typeof raw === "object") return raw as JadwalDoc;
@@ -328,10 +370,14 @@ async function handleLogin(request: Request, env: Env): Promise<Response> {
 	const passOk = await secureEqual(password, env.ADMIN_PASSWORD);
 
 	if (!userOk || !passOk) {
+		await appendLog(env, "login_failed", {
+			ip: request.headers.get("CF-Connecting-IP") || "unknown",
+		});
 		return json({ error: "Username atau password salah." }, 401);
 	}
 
 	const token = await signToken(env, username);
+	await appendLog(env, "login", { user: username });
 	return json({ token, expires_in: TOKEN_TTL_SECONDS, user: username });
 }
 
@@ -353,8 +399,96 @@ async function handlePutJadwal(request: Request, env: Env): Promise<Response> {
 	const result = validateJadwalDoc(raw);
 	if (!result.ok) return json({ error: result.error }, 400);
 
-	await kvSetJson(env, KV_KEY_JADWAL, result.doc);
+	// Simpan versi lama ke riwayat sebelum di-overwrite (undo).
+	const current = await kvGetJadwal(env);
+	await pushHistory(env, current);
+
+	// Tulis utama: kalau gagal (mis. kuota KV put harian habis), beri pesan jelas.
+	try {
+		await kvSetJson(env, KV_KEY_JADWAL, result.doc);
+	} catch (e) {
+		console.error("Simpan jadwal gagal:", e);
+		return json({ error: "Gagal menyimpan: kuota tulis KV habis. Coba lagi nanti." }, 503);
+	}
+	await appendLog(env, "jadwal_update", {
+		user: auth.u,
+		hari: Object.keys(result.doc).length,
+	});
 	return json({ ok: true, saved_at: new Date().toISOString(), jadwal: result.doc });
+}
+
+/* GET /api/me — admin. Validasi sesi server-side (dipakai dashboard saat load). */
+async function handleMe(request: Request, env: Env): Promise<Response> {
+	const auth = await requireAuth(request, env);
+	if (!auth) {
+		return json({ error: "Unauthorized. Token tidak valid atau kedaluwarsa." }, 401);
+	}
+	return json({ ok: true, user: auth.u, time: new Date().toISOString() });
+}
+
+/* GET /api/jadwal/history — admin. Daftar versi jadwal tersimpan (index 0 = terbaru). */
+async function handleGetHistory(request: Request, env: Env): Promise<Response> {
+	const auth = await requireAuth(request, env);
+	if (!auth) {
+		return json({ error: "Unauthorized. Token tidak valid atau kedaluwarsa." }, 401);
+	}
+
+	const history = ((await kvGetJson(env, KV_KEY_HISTORY)) || []) as HistoryEntry[];
+	const versions = history.map((h, index) => ({ index, saved_at: h.saved_at, jadwal: h.jadwal }));
+	return json({ versions });
+}
+
+/* POST /api/jadwal/restore — admin. Body: { index }. Kembalikan versi riwayat. */
+async function handleRestoreJadwal(request: Request, env: Env): Promise<Response> {
+	const auth = await requireAuth(request, env);
+	if (!auth) {
+		return json({ error: "Unauthorized. Token tidak valid atau kedaluwarsa." }, 401);
+	}
+
+	let body: { index?: unknown };
+	try {
+		body = await request.json();
+	} catch {
+		return json({ error: "Body harus berupa JSON" }, 400);
+	}
+
+	const history = ((await kvGetJson(env, KV_KEY_HISTORY)) || []) as HistoryEntry[];
+	const index = body.index;
+	if (typeof index !== "number" || !Number.isInteger(index) || index < 0 || index >= history.length) {
+		return json({ error: `index harus angka 0..${Math.max(0, history.length - 1)}` }, 400);
+	}
+
+	const version = history[index];
+	const result = validateJadwalDoc({ jadwal: version.jadwal });
+	if (!result.ok) return json({ error: result.error }, 400);
+
+	// Simpan versi sekarang ke riwayat (rantai tetap utuh), lalu restore.
+	const current = await kvGetJadwal(env);
+	await pushHistory(env, current);
+	try {
+		await kvSetJson(env, KV_KEY_JADWAL, result.doc);
+	} catch (e) {
+		console.error("Restore jadwal gagal:", e);
+		return json({ error: "Gagal restore: kuota tulis KV habis. Coba lagi nanti." }, 503);
+	}
+	await appendLog(env, "jadwal_restore", {
+		user: auth.u,
+		index,
+		restored_saved_at: version.saved_at,
+	});
+
+	return json({ ok: true, restored_at: new Date().toISOString(), jadwal: result.doc });
+}
+
+/* GET /api/logs — admin. Log aktivitas (login, update, restore). */
+async function handleGetLogs(request: Request, env: Env): Promise<Response> {
+	const auth = await requireAuth(request, env);
+	if (!auth) {
+		return json({ error: "Unauthorized. Token tidak valid atau kedaluwarsa." }, 401);
+	}
+
+	const logs = (await kvGetJson(env, KV_KEY_LOGS)) || [];
+	return json({ logs });
 }
 
 /* ---------------- Router (tambahkan fitur baru di sini) ---------------- */
@@ -370,6 +504,10 @@ const ROUTES: Route[] = [
 	{ method: "GET", pattern: "/api/jadwal", handler: handleGetJadwal },
 	{ method: "POST", pattern: "/api/login", handler: handleLogin },
 	{ method: "PUT", pattern: "/api/jadwal", handler: handlePutJadwal },
+	{ method: "GET", pattern: "/api/me", handler: handleMe },
+	{ method: "GET", pattern: "/api/jadwal/history", handler: handleGetHistory },
+	{ method: "POST", pattern: "/api/jadwal/restore", handler: handleRestoreJadwal },
+	{ method: "GET", pattern: "/api/logs", handler: handleGetLogs },
 ];
 
 const compiledRoutes = ROUTES.map((r) => ({ ...r, pattern: new URLPattern({ pathname: r.pattern }) }));

@@ -1,7 +1,7 @@
 // Konfigurasi URL
 const STATS_URL = 'https://voiceoftrisma-stream-stats.anandapradnyana68.workers.dev?t=';
-// Jadwal kini diambil dari Cloudflare Worker (bukan jadwal.json lagi).
-// Data dikelola lewat Dashboard Admin: ./dashboard
+// Jadwal diambil dari Cloudflare Worker (API admin-worker).
+// File lokal jadwal.json sudah dihapus — kelola lewat Dashboard Admin: ./dashboard
 const JADWAL_URL = 'https://voiceoftrisma-admin-worker.anandapradnyana68.workers.dev/api/jadwal?t=';
 
 // Elemen DOM
