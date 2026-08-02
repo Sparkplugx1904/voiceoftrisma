@@ -18,7 +18,7 @@ export async function updateMetrics(env: Env): Promise<void> {
 
 	if (hour >= 15 && hour < 19) {
 		try {
-			const response = await fetch("http://i.klikhost.com:8502/stats?json=1");
+			const response = await fetch("http://i.klikhost.com:8502/stats?json=1", { signal: AbortSignal.timeout(8000) });
 			if (response.ok) {
 				const data = await response.json();
 				await d1SetJson(env.DB, "last_stats", data);
