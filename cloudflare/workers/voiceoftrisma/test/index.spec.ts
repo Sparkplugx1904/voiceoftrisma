@@ -1,27 +1,30 @@
-import { env, createExecutionContext, waitOnExecutionContext, SELF } from "cloudflare:test";
-import { describe, it, expect } from "vitest";
-import { mergeSample } from "../src/stream-stats";
+import { env, createExecutionContext, waitOnExecutionContext, SELF, applyD1Migrations } from "cloudflare:test";
+import { beforeAll, describe, it, expect } from "vitest";
 import { adminRoutes } from "../src/admin";
-import { verifyToken } from "../src/shared";
+import { verifyToken, signToken } from "../src/shared";
 
 const IncomingRequest = Request<unknown, IncomingRequestCfProperties>;
 
-/* KV tiruan untuk unit test handler (get → null, put → no-op). */
-function fakeKv() {
+/* D1 tiruan untuk unit test handler (get → null, semua op no-op). */
+function fakeD1() {
 	return {
-		get: async () => null,
-		put: async () => {},
-		list: async () => ({ keys: [] }),
-		delete: async () => {},
-	} as unknown as KVNamespace;
+		prepare: () => ({
+			bind: () => ({
+				first: async () => null,
+				all: async () => ({ results: [] }),
+				run: async () => ({}),
+			}),
+		}),
+	} as unknown as D1Database;
 }
 
 function fakeEnv() {
 	return {
-		VOT_ADMIN_STORE: fakeKv(),
-		VOT_STREAM_STATS: fakeKv(),
-		ARCHIVE_KV: fakeKv(),
-		VOT_METRICS_STORE: fakeKv(),
+		DB: fakeD1(),
+		VOT_ADMIN_STORE: null,
+		VOT_STREAM_STATS: null,
+		ARCHIVE_KV: null,
+		VOT_METRICS_STORE: null,
 		ADMIN_USERNAME: "test-admin",
 		ADMIN_PASSWORD: "test-pass",
 		SESSION_SECRET: "test-secret-for-unit",
@@ -29,30 +32,65 @@ function fakeEnv() {
 	};
 }
 
-describe("mergeSample (pure logic)", () => {
-	it("menambahkan sample baru di bucket berbeda", () => {
-		const out = mergeSample([], 1_700_000_000, 5, 1);
-		expect(out).toEqual([[1_700_000_000, 5, 1]]);
+/* Env tanpa secrets — harus ditolak oleh guard (jangan bandingkan "undefined"). */
+function fakeEnvNoSecrets() {
+	return { ...fakeEnv(), ADMIN_USERNAME: "", ADMIN_PASSWORD: "", SESSION_SECRET: "" };
+}
+
+/* Skema D1 untuk database test in-memory (cermin migrations/0001_init.sql). */
+const MIGRATIONS = [
+	{
+		name: "0001_init",
+		queries: [
+			"CREATE TABLE IF NOT EXISTS kv_store (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at INTEGER NOT NULL) WITHOUT ROWID",
+			"CREATE TABLE IF NOT EXISTS samples (t INTEGER PRIMARY KEY, listeners INTEGER NOT NULL, status INTEGER NOT NULL) WITHOUT ROWID",
+		],
+	},
+];
+
+beforeAll(async () => {
+	// Terapkan skema D1 (kv_store + samples) ke database test in-memory.
+	await applyD1Migrations(env.DB, MIGRATIONS);
+});
+
+describe("samples D1 (time-series)", () => {
+	it("history hanya memuat sample dalam 6 jam terakhir, terurut naik", async () => {
+		const now = Math.floor(Date.now() / 1000);
+		// seed: 1 sample lama (>6 jam) + 2 sample baru
+		await env.DB.prepare("INSERT INTO samples (t, listeners, status) VALUES (?, ?, ?)")
+			.bind(now - 7 * 3600, 9, 1)
+			.run();
+		await env.DB.prepare("INSERT INTO samples (t, listeners, status) VALUES (?, ?, ?)")
+			.bind(now - 600, 2, 1)
+			.run();
+		await env.DB.prepare("INSERT INTO samples (t, listeners, status) VALUES (?, ?, ?)")
+			.bind(now - 300, 5, 1)
+			.run();
+
+		const res = await SELF.fetch("https://example.com/stats?history=1");
+		expect(res.status).toBe(200);
+		const body = await res.json();
+		expect(Array.isArray(body.history)).toBe(true);
+		// sample tua ter-trim oleh query WHERE t >= cutoff
+		expect(body.history).toHaveLength(2);
+		expect(body.history[0][1]).toBe(2);
+		expect(body.history[1][1]).toBe(5);
 	});
 
-	it("meng-update sample dalam bucket yang sama", () => {
-		const base = 1_700_000_000;
-		const t0 = base - (base % 300); // awal bucket
-		const out = mergeSample([[t0, 3, 1]], t0 + 120, 9, 1);
-		expect(out).toHaveLength(1);
-		expect(out[0][1]).toBe(9);
-	});
+	it("upsert per bucket: nilai terakhir menang (dedupe)", async () => {
+		const t = Math.floor(Date.now() / 1000 / 300) * 300; // awal bucket saat ini
+		await env.DB.prepare("INSERT INTO samples (t, listeners, status) VALUES (?, ?, ?) ON CONFLICT(t) DO UPDATE SET listeners = excluded.listeners, status = excluded.status")
+			.bind(t, 3, 1)
+			.run();
+		await env.DB.prepare("INSERT INTO samples (t, listeners, status) VALUES (?, ?, ?) ON CONFLICT(t) DO UPDATE SET listeners = excluded.listeners, status = excluded.status")
+			.bind(t, 7, 1)
+			.run();
 
-	it("trim sample lebih tua dari 6 jam", () => {
-		const now = 1_700_000_000;
-		const cutoff = now - 6 * 3600;
-		const out = mergeSample(
-			[[cutoff - 1, 1, 1], [now - 600, 2, 1]],
-			now,
-			4,
-			1
-		);
-		expect(out.map((s) => s[0])).toEqual([now - 600, now]);
+		const { results } = await env.DB.prepare("SELECT t, listeners, status FROM samples WHERE t = ?")
+			.bind(t)
+			.all<{ t: number; listeners: number; status: number }>();
+		expect(results).toHaveLength(1);
+		expect(results[0].listeners).toBe(7);
 	});
 });
 
@@ -96,21 +134,39 @@ describe("router worker gabungan", () => {
 		expect(res.status).toBe(401);
 	});
 
-	it("GET /api/jadwal -> seed default saat KV kosong", async () => {
+	it("POST /api/login saat secrets belum terpasang -> 503 (guard)", async () => {
+		const loginRoute = adminRoutes.find((r) => r.method === "POST" && r.pattern === "/api/login");
+		expect(loginRoute).toBeDefined();
+		const request = new IncomingRequest("https://example.com/api/login", {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({ username: "undefined", password: "undefined" }),
+		});
+		const res = await loginRoute!.handler(request, fakeEnvNoSecrets() as any, createExecutionContext());
+		expect(res.status).toBe(503);
+	});
+
+	it("verifyToken tanpa SESSION_SECRET -> null (guard)", async () => {
+		const token = await signToken(fakeEnv() as any, "test-admin");
+		const verified = await verifyToken(fakeEnvNoSecrets() as any, token);
+		expect(verified).toBeNull();
+	});
+
+	it("GET /api/jadwal -> seed default saat D1 kosong", async () => {
 		const res = await SELF.fetch("https://example.com/api/jadwal");
 		expect(res.status).toBe(200);
 		const body = await res.json();
 		expect(typeof body.jadwal).toBe("object");
 	});
 
-	it("GET /stats?history=1 -> struktur history (KV kosong)", async () => {
+	it("GET /stats?history=1 -> struktur history (D1 kosong)", async () => {
 		const res = await SELF.fetch("https://example.com/stats?history=1");
 		expect(res.status).toBe(200);
 		const body = await res.json();
 		expect(Array.isArray(body.history)).toBe(true);
 	});
 
-	it("GET /metrics -> data belum tersedia saat KV kosong", async () => {
+	it("GET /metrics -> data belum tersedia saat D1 kosong", async () => {
 		const res = await SELF.fetch("https://example.com/metrics");
 		expect(res.status).toBe(200);
 		const body = await res.json();

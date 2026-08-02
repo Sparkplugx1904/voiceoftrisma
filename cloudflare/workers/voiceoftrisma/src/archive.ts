@@ -2,20 +2,15 @@
    VOICE OF TRISMA — MODUL ARCHIVE (dari archive-cache-worker)
    ---------------------------------------------------------
    1. Cron tiap 30 menit: rekap uploads Archive.org user
-      (IA_USER) lalu simpan ke KV ARCHIVE_KV (key "UPLOADS_DATA_FULL").
+      (IA_USER) lalu simpan ke D1 (key "UPLOADS_DATA_FULL").
    2. GET /archive = API pencarian arsip: filter (query), sort,
       pagination (hits_per_page, page). Parameter lewat query string.
    ========================================================= */
 
-import { Env, Route } from "./shared";
+import { Env, Route, json, d1GetJson, d1SetJson } from "./shared";
 
 const IA_USER = "@16_i_gede_ananda_pradnyana";
 const KV_KEY = "UPLOADS_DATA_FULL";
-
-const corsHeaders = {
-	"Access-Control-Allow-Origin": "*",
-	"Content-Type": "application/json",
-};
 
 /* Rekap otomatis: scrape semua halaman uploads user → satu nilai KV. */
 export async function updateArchiveCache(env: Env) {
@@ -25,7 +20,7 @@ export async function updateArchiveCache(env: Env) {
 
 	try {
 		while (true) {
-			const resp = await fetch(`https://archive.org/services/search/beta/page_production/?page_type=account_details&page_target=${IA_USER}&page_elements=[%22uploads%22]&hits_per_page=1000&page=${page}`);
+			const resp = await fetch(`https://archive.org/services/search/beta/page_production/?page_type=account_details&page_target=${IA_USER}&page_elements=[%22uploads%22]&hits_per_page=1000&page=${page}`, { signal: AbortSignal.timeout(15000) });
 			const json: any = await resp.json();
 			const uploads = json?.response?.body?.page_elements?.uploads;
 			const hits = uploads?.hits?.hits || [];
@@ -44,7 +39,7 @@ export async function updateArchiveCache(env: Env) {
 			if (hits.length === 0 || allHits.length >= (totalHits || 0)) break;
 			page++;
 		}
-		await env.ARCHIVE_KV.put(KV_KEY, JSON.stringify({ items: allHits }));
+		await d1SetJson(env.DB, KV_KEY, { items: allHits });
 	} catch (e) {
 		console.error(e);
 	}
@@ -54,17 +49,16 @@ export async function updateArchiveCache(env: Env) {
 async function handleArchive(request: Request, env: Env): Promise<Response> {
 	const url = new URL(request.url);
 
-	const rawData = await env.ARCHIVE_KV.get(KV_KEY);
-	if (!rawData) {
-		return new Response(JSON.stringify({ error: "Cache empty or warming up." }), { status: 404, headers: corsHeaders });
+	const parsed = await d1GetJson(env.DB, KV_KEY);
+	if (!parsed) {
+		return json({ error: "Cache empty or warming up." }, 404);
 	}
 
 	let items: any[] = [];
 	try {
-		const parsed = JSON.parse(rawData);
-		items = parsed.items || [];
+		items = (parsed as { items?: any[] }).items || [];
 	} catch (e) {
-		return new Response(JSON.stringify({ error: "Cache corrupt." }), { status: 500, headers: corsHeaders });
+		return json({ error: "Cache corrupt." }, 500);
 	}
 
 	// Params
@@ -103,13 +97,13 @@ async function handleArchive(request: Request, env: Env): Promise<Response> {
 		resultItems = items;
 	}
 
-	return new Response(JSON.stringify({
+	return json({
 		status: "success",
 		total_results: totalItems,
 		current_page: page,
 		total_pages: Math.ceil(totalItems / hitsLimit),
 		data: resultItems,
-	}), { headers: corsHeaders });
+	});
 }
 
 export const archiveRoutes: Route[] = [

@@ -2,23 +2,24 @@
  * Worker gabungan VOICE OF TRISMA
  * ---------------------------------------------------------
  * Satu worker, lima modul (route prefix dirapikan):
- *   /api/*    -> admin (login, jadwal, riwayat, log)   [KV VOT_ADMIN_STORE]
- *   /stats    -> stream-stats (proxy live + ?history=1) [KV VOT_STREAM_STATS]
- *   /archive  -> cache arsip Archive.org                [KV ARCHIVE_KV]
- *   /metrics  -> snapshot stats icecast (15:00-19:00 WITA) [KV VOT_METRICS_STORE]
+ *   /api/*    -> admin (login, jadwal, riwayat, log)   [D1 kv_store]
+ *   /stats    -> stream-stats (proxy live + ?history=1) [D1 samples]
+ *   /archive  -> cache arsip Archive.org                [D1 kv_store]
+ *   /metrics  -> snapshot stats icecast (15:00-19:00 WITA) [D1 kv_store]
  *   /workflow -> stub info (kerja lewat cron saja)
  *
  * Cron (named triggers — event.cron dipakai untuk routing):
- *   stream-stats : setiap 5 menit  poll icecast -> sample KV
- *   archive      : setiap 30 menit rekap uploads Archive.org -> KV
+ *   stream-stats : setiap 5 menit  poll icecast -> sample D1
+ *   archive      : setiap 30 menit rekap uploads Archive.org -> D1
  *   workflow     : 07:00 UTC      trigger GHA record+transcript
  *   metrics      : setiap menit   snapshot stats (hanya jam siaran)
  *
  * Secrets (set via: npx wrangler secret put <NAMA>):
  *   ADMIN_USERNAME / ADMIN_PASSWORD / SESSION_SECRET / GITHUB_TOKEN
  *
- * KV namespace = SAMA dengan worker lama (id tidak berubah),
- * jadi data jadwal/samples/archive/metrics LANGSUNG tersedia, tanpa migrasi.
+ * D1: semua data aplikasi pindah dari KV ke D1 (migrasi 2026-08-02,
+ * data lama dipindah sekali jalan dari KV). Binding KV lama DIKUNCI
+ * di sini hanya sebagai cadangan rollback — kode TIDAK memakainya.
  */
 {
 	"$schema": "node_modules/wrangler/config-schema.json",
@@ -30,17 +31,22 @@
 		"enabled": true
 	},
 	"upload_source_maps": true,
-	// NOTE: cron TIDAK dipasang di worker ini — worker lama tetap hidup di
-	// Cloudflare dan memegang cron (keputusan user 2026-08-02). Jika worker
-	// lama suatu saat dihapus, uncomment blok ini (limit akun free: 5 cron).
-	// "triggers": {
-	// 	"crons": [
-	// 		"*/5 * * * *",
-	// 		"*/30 * * * *",
-	// 		"0 7 * * *",
-	// 		"* * * * *"
-	// 	]
-	// },
+	"triggers": {
+		"crons": [
+			"*/5 * * * *",
+			"*/30 * * * *",
+			"0 7 * * *",
+			"* * * * *"
+		]
+	},
+	"d1_databases": [
+		{
+			"binding": "DB",
+			"database_name": "voiceoftrisma",
+			"database_id": "372be547-68c0-4061-832c-693877793c6b",
+			"migrations_dir": "migrations"
+		}
+	],
 	"kv_namespaces": [
 		{
 			"binding": "VOT_ADMIN_STORE",

@@ -5,7 +5,10 @@
    ========================================================= */
 
 export interface Env {
-	// KV namespaces (id sama dengan worker lama — data langsung terbaca)
+	// D1 — penyimpanan data aplikasi (pengganti KV, migrasi 2026-08-02)
+	DB: D1Database;
+	// KV namespace LAMA — dipertahankan hanya sebagai cadangan rollback;
+	// kode tidak lagi memakainya (semua akses lewat DB).
 	VOT_ADMIN_STORE: KVNamespace;
 	VOT_STREAM_STATS: KVNamespace;
 	ARCHIVE_KV: KVNamespace;
@@ -50,6 +53,13 @@ export function withCors(response: Response): Response {
 }
 
 /* ---------------- Kripto pembanding ---------------- */
+
+/* True jika semua secret wajib sudah terpasang (wrangler secret put).
+   Tanpa guard ini, env yang undefined membuat secureEqual membandingkan
+   string "undefined" → password "undefined" bisa lolos login. */
+export function secretsReady(env: Env): boolean {
+	return Boolean(env.ADMIN_USERNAME && env.ADMIN_PASSWORD && env.SESSION_SECRET);
+}
 
 /* Perbandingan string konstan-waktu (anti timing attack). */
 export function timingSafeEqual(a: string, b: string): boolean {
@@ -96,6 +106,7 @@ export async function hmac(secret: string, data: string): Promise<string> {
 const TOKEN_TTL_SECONDS = 7 * 24 * 3600; // token berlaku 7 hari
 
 export async function signToken(env: Env, username: string): Promise<string> {
+	if (!env.SESSION_SECRET) throw new Error("SESSION_SECRET belum dikonfigurasi");
 	const payload = b64url(
 		JSON.stringify({ u: username, exp: Math.floor(Date.now() / 1000) + TOKEN_TTL_SECONDS })
 	);
@@ -104,6 +115,7 @@ export async function signToken(env: Env, username: string): Promise<string> {
 }
 
 export async function verifyToken(env: Env, token: string): Promise<{ u: string } | null> {
+	if (!env.SESSION_SECRET) return null; // secret belum diset → tidak ada token valid
 	const parts = token.split(".");
 	if (parts.length !== 2) return null;
 	const [payloadB64, sig] = parts;
@@ -129,7 +141,7 @@ export async function requireAuth(request: Request, env: Env): Promise<{ u: stri
 	return verifyToken(env, token);
 }
 
-/* ---------------- Helper KV generik ---------------- */
+/* ---------------- Helper KV generik (LEGACY — tidak dipakai kode baru) ---------------- */
 
 export async function kvGetJson(kv: KVNamespace, key: string): Promise<unknown | null> {
 	const raw = await kv.get(key);
@@ -143,4 +155,26 @@ export async function kvGetJson(kv: KVNamespace, key: string): Promise<unknown |
 
 export async function kvSetJson(kv: KVNamespace, key: string, value: unknown): Promise<void> {
 	await kv.put(key, JSON.stringify(value));
+}
+
+/* ---------------- Helper D1 generik (key-value di tabel kv_store) ---------------- */
+
+export async function d1GetJson(db: D1Database, key: string): Promise<unknown | null> {
+	const row = await db.prepare("SELECT value FROM kv_store WHERE key = ?").bind(key).first<{ value: string }>();
+	if (!row) return null;
+	try {
+		return JSON.parse(row.value);
+	} catch {
+		return null;
+	}
+}
+
+export async function d1SetJson(db: D1Database, key: string, value: unknown): Promise<void> {
+	await db
+		.prepare(
+			"INSERT INTO kv_store (key, value, updated_at) VALUES (?, ?, ?) " +
+				"ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at"
+		)
+		.bind(key, JSON.stringify(value), Date.now())
+		.run();
 }
