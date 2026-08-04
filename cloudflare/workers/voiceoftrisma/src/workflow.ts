@@ -23,6 +23,7 @@ async function triggerWorkflow(workflow: string, token: string): Promise<{ workf
 			"User-Agent": "voiceoftrisma-worker",
 		},
 		body: JSON.stringify({ ref: "main" }),
+		signal: AbortSignal.timeout(15000), // jangan biarkan cron menggantung
 	});
 
 	return { workflow, status: res.status, ok: res.ok };

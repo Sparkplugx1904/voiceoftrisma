@@ -18,6 +18,27 @@ function fakeD1() {
 	} as unknown as D1Database;
 }
 
+/* D1 in-memory yang benar-benar menyimpan nilai per key — dipakai untuk
+   memverifikasi isi log aktivitas (admin_logs) di unit test. */
+function memD1(store: Map<string, string>) {
+	return {
+		prepare: () => ({
+			bind: (...args: string[]) => ({
+				first: async () => {
+					const key = String(args[0] ?? "");
+					return store.has(key) ? { value: store.get(key) } : null;
+				},
+				all: async () => ({ results: [] }),
+				run: async () => {
+					// d1SetJson: INSERT ... VALUES (?, ?, updated_at) — arg[0]=key, arg[1]=value
+					store.set(String(args[0]), String(args[1]));
+					return {};
+				},
+			}),
+		}),
+	} as unknown as D1Database;
+}
+
 function fakeEnv() {
 	return {
 		DB: fakeD1(),
@@ -132,6 +153,85 @@ describe("router worker gabungan", () => {
 			body: JSON.stringify({ username: "test-admin", password: "salah" }),
 		});
 		expect(res.status).toBe(401);
+	});
+
+	it("login gagal tercatat 'login_failed' + IP (salah password)", async () => {
+		const store = new Map<string, string>();
+		const loginRoute = adminRoutes.find((r) => r.method === "POST" && r.pattern === "/api/login");
+		expect(loginRoute).toBeDefined();
+		const request = new IncomingRequest("https://example.com/api/login", {
+			method: "POST",
+			headers: { "Content-Type": "application/json", "CF-Connecting-IP": "198.51.100.4" },
+			body: JSON.stringify({ username: "test-admin", password: "salah" }),
+		});
+		const res = await loginRoute!.handler(request, { ...fakeEnv(), DB: memD1(store) } as any, createExecutionContext());
+		expect(res.status).toBe(401);
+		const logs = JSON.parse(store.get("admin_logs")!);
+		expect(logs).toHaveLength(1);
+		expect(logs[0].action).toBe("login_failed");
+		expect(logs[0].detail.user).toBe("test-admin");
+		expect(logs[0].ip).toBe("198.51.100.4");
+		expect(typeof logs[0].t).toBe("string");
+	});
+
+	it("login sukses tercatat 'login' dengan info akses (IP & User-Agent)", async () => {
+		const store = new Map<string, string>();
+		const loginRoute = adminRoutes.find((r) => r.method === "POST" && r.pattern === "/api/login");
+		expect(loginRoute).toBeDefined();
+		const request = new IncomingRequest("https://example.com/api/login", {
+			method: "POST",
+			headers: {
+				"Content-Type": "application/json",
+				"CF-Connecting-IP": "203.0.113.9",
+				"User-Agent": "VoT-Test/2.0 Mobile",
+			},
+			body: JSON.stringify({ username: "test-admin", password: "test-pass" }),
+		});
+		const res = await loginRoute!.handler(request, { ...fakeEnv(), DB: memD1(store) } as any, createExecutionContext());
+		expect(res.status).toBe(200);
+		const logs = JSON.parse(store.get("admin_logs")!);
+		expect(logs[0].action).toBe("login");
+		expect(logs[0].detail.user).toBe("test-admin");
+		expect(logs[0].ip).toBe("203.0.113.9");
+		expect(logs[0].ua).toBe("VoT-Test/2.0 Mobile");
+		expect(typeof logs[0].org).toBe("string"); // meta wajib ada walau kosong saat dev
+	});
+
+	it("rate limit login: percobaan ke-6 dari IP sama -> 429 + login_locked tercatat sekali", async () => {
+		const store = new Map<string, string>();
+		const loginRoute = adminRoutes.find((r) => r.method === "POST" && r.pattern === "/api/login");
+		expect(loginRoute).toBeDefined();
+		const env = { ...fakeEnv(), DB: memD1(store) } as any;
+		const headers = { "Content-Type": "application/json", "CF-Connecting-IP": "203.0.113.77" };
+		const attempt = (password: string) =>
+			loginRoute!.handler(
+				new IncomingRequest("https://example.com/api/login", {
+					method: "POST",
+					headers,
+					body: JSON.stringify({ username: "test-admin", password }),
+				}),
+				env,
+				createExecutionContext()
+			);
+
+		for (let i = 1; i <= 5; i++) {
+			const res = await attempt("salah");
+			expect(res.status).toBe(401); // 5 pertama: gagal biasa
+		}
+		const locked = await attempt("salah");
+		expect(locked.status).toBe(429); // ke-6: diblokir
+		expect(locked.headers.get("Retry-After")).toBeTruthy();
+
+		const logs = JSON.parse(store.get("admin_logs")!);
+		const lockedLogs = logs.filter((l: { action: string }) => l.action === "login_locked");
+		const failedLogs = logs.filter((l: { action: string }) => l.action === "login_failed");
+		expect(failedLogs).toHaveLength(5); // hanya 5 percobaan tercatat
+		expect(lockedLogs).toHaveLength(1); // lock tercatat tepat sekali, bukan tiap spam
+
+		// Percobaan berikutnya (masih diblokir) TIDAK menambah log baru.
+		const blockedAgain = await attempt("salah");
+		expect(blockedAgain.status).toBe(429);
+		expect(JSON.parse(store.get("admin_logs")!)).toHaveLength(6);
 	});
 
 	it("POST /api/login saat secrets belum terpasang -> 503 (guard)", async () => {

@@ -79,33 +79,57 @@ const DEFAULT_JADWAL: JadwalDoc = {
 	],
 };
 
-/* ---------------- Rate limiter login (best-effort, per-isolate) ---------------- */
+/* ---------------- Rate limiter login (durable, lintas-isolate) ----------------
+   Sebelumnya memakai Map in-memory per-isolate, yang TIDAK bertahan saat
+   Cloudflare menyalakan ulang isolate dan TIDAK menyatu lintas instansi —
+   penyerang cukup berganti-ganti isolate/IP. Sekarang counter disimpan di D1
+   (key `login_rl:<ip>`), sehingga batas berlaku secara global & persisten.
+   Jadinya sekaligus mencegah log login_failed penuh oleh brute-force. */
 
-const loginAttempts = new Map<string, { count: number; windowStart: number }>();
+interface RateLimitResult {
+	allowed: boolean;
+	retryAfterSeconds?: number;
+	justLocked: boolean; // true hanya pada percobaan yang MENTIMBULKAN blok (untuk catat login_locked sekali)
+}
 
-function checkRateLimit(request: Request): { allowed: boolean; retryAfterSeconds?: number } {
-	const ip = request.headers.get("CF-Connecting-IP") || "unknown";
+async function checkRateLimit(request: Request, env: Env): Promise<RateLimitResult> {
+	const ip = request.headers.get("CF-Connecting-IP") || request.headers.get("True-Client-IP") || "unknown";
+	const key = `login_rl:${ip}`;
 	const now = Date.now();
-	const entry = loginAttempts.get(ip);
+
+	let entry = (await d1GetJson(env.DB, key)) as { count: number; windowStart: number } | null;
 
 	if (!entry || now - entry.windowStart > LOGIN_WINDOW_MS) {
-		loginAttempts.set(ip, { count: 1, windowStart: now });
-		return { allowed: true };
+		// Jendela baru (atau data lama kedaluwarsa): reset counter utk IP ini.
+		await d1SetJson(env.DB, key, { count: 1, windowStart: now });
+
+		// Hygiene: sesekali buang key rate-limit yang sudah basi supaya tabel
+		// tidak membesar tanpa batas oleh IP yang hanya lewat sekali.
+		if (Math.random() < 0.01) {
+			await env.DB.prepare(
+				"DELETE FROM kv_store WHERE key LIKE 'login_rl:%' AND json_extract(value, '$.windowStart') < ?"
+			)
+				.bind(now - LOGIN_WINDOW_MS * 2)
+				.run()
+				.catch((e) => console.error("prune login_rl gagal:", e));
+		}
+
+		return { allowed: true, justLocked: false };
 	}
 
 	entry.count += 1;
+	await d1SetJson(env.DB, key, entry);
+
 	if (entry.count > LOGIN_MAX_ATTEMPTS) {
 		const retryAfterSeconds = Math.max(1, Math.ceil((LOGIN_WINDOW_MS - (now - entry.windowStart)) / 1000));
-		return { allowed: false, retryAfterSeconds };
+		return {
+			allowed: false,
+			retryAfterSeconds,
+			// Catat lock hanya pada transisi pertama (count == MAX+1), bukan tiap spam.
+			justLocked: entry.count === LOGIN_MAX_ATTEMPTS + 1,
+		};
 	}
-	// Prune sederhana: map tumbuh karena entry per-IP; bersihkan saat membesar
-	// supaya isolate tidak menahan memory tanpa batas (best-effort).
-	if (loginAttempts.size > 1000) {
-		for (const [ip, e] of loginAttempts) {
-			if (now - e.windowStart > LOGIN_WINDOW_MS) loginAttempts.delete(ip);
-		}
-	}
-	return { allowed: true };
+	return { allowed: true, justLocked: false };
 }
 
 /* ---------------- Riwayat jadwal & log aktivitas ---------------- */
@@ -128,21 +152,75 @@ async function pushHistory(env: Env, doc: JadwalDoc): Promise<void> {
 	}
 }
 
+/* ---------------- Info akses (audit trail) ----------------
+   Setiap entri log dibekali identitas pengakses, mengikuti standar
+   industri untuk sistem pencatatan akses login:
+
+     ip        IP publik (CF-Connecting-IP / True-Client-IP)
+     ua        User-Agent (browser + OS)
+     country   kode negara (CF-IPCountry / cf.country)
+     asn       ASN (Autonomous System Number, cf.asn)
+     org       nama ISP / organisasi (cf.asOrganization)
+
+   CATATAN: alamat MAC TIDAK dapat diambil di sisi server. Protokol
+   HTTP tidak membawa MAC address client ke web — MAC hanya terlihat
+   di LAN lokal, bukan lewat server. Padanannya di web adalah kombinasi
+   IP + User-Agent + ASN di atas. */
+interface LoginEntry {
+	t: string;
+	action: string;
+	detail: unknown;
+	ip: string;
+	ua: string;
+	country: string;
+	asn: string;
+	org: string;
+}
+
+function buildAccessMeta(request: Request) {
+	const cf = (request as Request & { cf?: { country?: unknown; asn?: unknown; asOrganization?: unknown } }).cf;
+	return {
+		ip: request.headers.get("CF-Connecting-IP") || request.headers.get("True-Client-IP") || "unknown",
+		ua: (request.headers.get("User-Agent") || "").slice(0, 200),
+		country: String(cf?.country ?? "") || request.headers.get("CF-IPCountry") || "",
+		asn: cf?.asn ? String(cf.asn) : "",
+		org: String(cf?.asOrganization ?? ""),
+	};
+}
+
 /* Catat log aktivitas admin (index 0 = terbaru), potong ke LOGS_MAX.
    BEST-EFFORT: kegagalan penyimpanan tidak boleh menggagalkan request inti. */
-async function appendLog(env: Env, action: string, detail?: unknown): Promise<void> {
+async function appendLog(env: Env, request: Request, action: string, detail?: unknown): Promise<void> {
 	try {
-		const logs = ((await d1GetJson(env.DB, KV_KEY_LOGS)) || []) as Array<{
-			t: string;
-			action: string;
-			detail: unknown;
-		}>;
-		logs.unshift({ t: new Date().toISOString(), action, detail: detail ?? null });
+		const logs = ((await d1GetJson(env.DB, KV_KEY_LOGS)) || []) as LoginEntry[];
+		logs.unshift({ t: new Date().toISOString(), action, detail: detail ?? null, ...buildAccessMeta(request) });
 		while (logs.length > LOGS_MAX) logs.pop();
 		await d1SetJson(env.DB, KV_KEY_LOGS, logs);
 	} catch (e) {
 		console.error("appendLog gagal (best-effort):", e);
 	}
+}
+
+/* Catat 'access_denied' dengan THROTTLE: maksimal 1 entri per IP per 30 detik
+   (per-isolate; CF bisa membagi request ke beberapa isolate, jadi tetap ada
+   beberapa entri saat beban tinggi, tapi terbatas — bukan 1 tulis per request).
+   Tanpa ini, scanner/bot yang menebak token bisa membanjiri log admin dan
+   membakar kuota tulis D1 lewat request tanpa otorisasi (best-effort, in-memory). */
+const ACCESS_DENIED_THROTTLE_MS = 30_000;
+const lastDenyLog = new Map<string, number>();
+
+async function logAccessDenied(env: Env, request: Request): Promise<void> {
+	const ip = request.headers.get("CF-Connecting-IP") || request.headers.get("True-Client-IP") || "unknown";
+	const now = Date.now();
+	const last = lastDenyLog.get(ip);
+	if (last !== undefined && now - last < ACCESS_DENIED_THROTTLE_MS) return; // skip banjir
+	lastDenyLog.set(ip, now);
+	if (lastDenyLog.size > 2000) {
+		for (const [k, v] of lastDenyLog) {
+			if (now - v > 60_000) lastDenyLog.delete(k);
+		}
+	}
+	await appendLog(env, request, "access_denied", { path: request.url, method: request.method });
 }
 
 async function kvGetJadwal(env: Env): Promise<JadwalDoc> {
@@ -234,8 +312,13 @@ async function handleLogin(request: Request, env: Env): Promise<Response> {
 		return json({ error: "Server belum dikonfigurasi (secrets belum terpasang)." }, 503);
 	}
 
-	const rl = checkRateLimit(request);
+	const rl = await checkRateLimit(request, env);
 	if (!rl.allowed) {
+		// Catat 'login_locked' hanya pada transisi pertama yang membuat kunci,
+		// supaya log tidak jadi spam saat penyerang terus-terusan diblokir.
+		if (rl.justLocked) {
+			await appendLog(env, request, "login_locked", { reason: "rate_limit", retry_after: rl.retryAfterSeconds });
+		}
 		return json({ error: "Terlalu banyak percobaan login. Coba lagi nanti." }, 429, {
 			"Retry-After": String(rl.retryAfterSeconds ?? 60),
 		});
@@ -253,6 +336,7 @@ async function handleLogin(request: Request, env: Env): Promise<Response> {
 
 	// Batas panjang input — cegah body raksasa masuk ke hash/DB.
 	if (username.length > 100 || password.length > 200) {
+		await appendLog(env, request, "login_failed", { user: username, reason: "input_too_long" });
 		return json({ error: "Username atau password salah." }, 401);
 	}
 
@@ -261,14 +345,16 @@ async function handleLogin(request: Request, env: Env): Promise<Response> {
 	const passOk = await secureEqual(password, env.ADMIN_PASSWORD);
 
 	if (!userOk || !passOk) {
-		// Login GAGAL tidak dicatat ke DB (hindari banjir log dari brute-force).
-		// Proteksi brute-force tetap aktif via checkRateLimit (in-memory).
+		// Audit trail: login gagal dicatat (username + info akses + IP). Aman
+		// dari banjir log karena checkRateLimit membatasi ≤5 percobaan/10 menit/IP,
+		// dan log dibatasi LOGS_MAX entri.
+		await appendLog(env, request, "login_failed", { user: username });
 		return json({ error: "Username atau password salah." }, 401);
 	}
 
 	const token = await signToken(env, username);
 	// Audit trail: catat login sukses (best-effort).
-	await appendLog(env, "login", { user: username });
+	await appendLog(env, request, "login", { user: username });
 	return json({ token, expires_in: TOKEN_TTL_SECONDS, user: username });
 }
 
@@ -277,6 +363,7 @@ async function handleLogin(request: Request, env: Env): Promise<Response> {
 async function handlePutJadwal(request: Request, env: Env): Promise<Response> {
 	const auth = await requireAuth(request, env);
 	if (!auth) {
+		await logAccessDenied(env, request);
 		return json({ error: "Unauthorized. Token tidak valid atau kedaluwarsa." }, 401);
 	}
 
@@ -311,7 +398,7 @@ async function handlePutJadwal(request: Request, env: Env): Promise<Response> {
 		console.error("Simpan jadwal gagal:", e);
 		return json({ error: "Gagal menyimpan jadwal. Coba lagi nanti." }, 503);
 	}
-	await appendLog(env, "jadwal_update", {
+	await appendLog(env, request, "jadwal_update", {
 		user: auth.u,
 		hari: Object.keys(result.doc).length,
 	});
@@ -322,6 +409,7 @@ async function handlePutJadwal(request: Request, env: Env): Promise<Response> {
 async function handleMe(request: Request, env: Env): Promise<Response> {
 	const auth = await requireAuth(request, env);
 	if (!auth) {
+		await logAccessDenied(env, request);
 		return json({ error: "Unauthorized. Token tidak valid atau kedaluwarsa." }, 401);
 	}
 	return json({ ok: true, user: auth.u, time: new Date().toISOString() });
@@ -331,10 +419,12 @@ async function handleMe(request: Request, env: Env): Promise<Response> {
 async function handleGetHistory(request: Request, env: Env): Promise<Response> {
 	const auth = await requireAuth(request, env);
 	if (!auth) {
+		await logAccessDenied(env, request);
 		return json({ error: "Unauthorized. Token tidak valid atau kedaluwarsa." }, 401);
 	}
 
 	const history = ((await d1GetJson(env.DB, KV_KEY_HISTORY)) || []) as HistoryEntry[];
+	await appendLog(env, request, "history_view", { user: auth.u });
 	const versions = history.map((h, index) => ({ index, saved_at: h.saved_at, jadwal: h.jadwal }));
 	return json({ versions });
 }
@@ -343,6 +433,7 @@ async function handleGetHistory(request: Request, env: Env): Promise<Response> {
 async function handleRestoreJadwal(request: Request, env: Env): Promise<Response> {
 	const auth = await requireAuth(request, env);
 	if (!auth) {
+		await logAccessDenied(env, request);
 		return json({ error: "Unauthorized. Token tidak valid atau kedaluwarsa." }, 401);
 	}
 
@@ -372,7 +463,7 @@ async function handleRestoreJadwal(request: Request, env: Env): Promise<Response
 		console.error("Restore jadwal gagal:", e);
 		return json({ error: "Gagal restore jadwal. Coba lagi nanti." }, 503);
 	}
-	await appendLog(env, "jadwal_restore", {
+	await appendLog(env, request, "jadwal_restore", {
 		user: auth.u,
 		index,
 		restored_saved_at: version.saved_at,
@@ -385,11 +476,22 @@ async function handleRestoreJadwal(request: Request, env: Env): Promise<Response
 async function handleGetLogs(request: Request, env: Env): Promise<Response> {
 	const auth = await requireAuth(request, env);
 	if (!auth) {
+		await logAccessDenied(env, request);
 		return json({ error: "Unauthorized. Token tidak valid atau kedaluwarsa." }, 401);
 	}
 
 	const logs = (await d1GetJson(env.DB, KV_KEY_LOGS)) || [];
 	return json({ logs });
+}
+
+/* POST /api/logout — admin. Catat logout (best-effort). */
+async function handleLogout(request: Request, env: Env): Promise<Response> {
+	const auth = await requireAuth(request, env);
+	if (!auth) {
+		return json({ error: "Unauthorized. Token tidak valid atau kedaluwarsa." }, 401);
+	}
+	await appendLog(env, request, "logout", { user: auth.u });
+	return json({ ok: true });
 }
 
 /* ---------------- Route modul admin ---------------- */
@@ -398,6 +500,7 @@ export const adminRoutes: Route[] = [
 	{ method: "GET", pattern: "/api/health", handler: handleHealth },
 	{ method: "GET", pattern: "/api/jadwal", handler: handleGetJadwal },
 	{ method: "POST", pattern: "/api/login", handler: handleLogin },
+	{ method: "POST", pattern: "/api/logout", handler: handleLogout },
 	{ method: "PUT", pattern: "/api/jadwal", handler: handlePutJadwal },
 	{ method: "GET", pattern: "/api/me", handler: handleMe },
 	{ method: "GET", pattern: "/api/jadwal/history", handler: handleGetHistory },
