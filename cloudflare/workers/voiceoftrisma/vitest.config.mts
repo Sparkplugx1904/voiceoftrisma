@@ -11,6 +11,10 @@ export default defineWorkersConfig({
 						ADMIN_PASSWORD: "test-pass",
 						SESSION_SECRET: "test-secret-for-vitest-only",
 						GITHUB_TOKEN: "test-token",
+						// Anti-DDoS limiter: nonaktifkan praktis di test (unit test
+						// `rateLimited` menguji logika limiter secara terpisah).
+						MAX_REQ_IP_10S: "1000000",
+						MAX_REQ_GLOBAL_10S: "1000000",
 					},
 				},
 			},

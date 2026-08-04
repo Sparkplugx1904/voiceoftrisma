@@ -27,6 +27,20 @@
 	"main": "src/index.ts",
 	"compatibility_date": "2026-05-02",
 	"compatibility_flags": ["nodejs_compat"],
+	"durable_objects": {
+		"bindings": [
+			{
+				"name": "RATE_LIMITER",
+				"class_name": "RateLimitDO"
+			}
+		]
+	},
+	"migrations": [
+		{
+			"tag": "v1-ratelimit-do",
+			"new_sqlite_classes": ["RateLimitDO"]
+		}
+	],
 	"observability": {
 		"enabled": true
 	},

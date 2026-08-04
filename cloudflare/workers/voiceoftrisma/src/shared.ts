@@ -18,6 +18,12 @@ export interface Env {
 	ADMIN_PASSWORD: string;
 	SESSION_SECRET: string;
 	GITHUB_TOKEN: string;
+	// (opsional) tuning anti-DDoS layer-7 — nilai string; default tertanam di index.ts
+	MAX_REQ_IP_10S?: string;
+	MAX_REQ_GLOBAL_10S?: string;
+	// Durable Object rate limiter (shared lintas-isolate). Opsional supaya
+	// env test / dev tanpa binding tidak crash (fail-open).
+	RATE_LIMITER?: DurableObjectNamespace;
 }
 
 export interface Route {

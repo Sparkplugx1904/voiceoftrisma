@@ -2,6 +2,7 @@ import { env, createExecutionContext, waitOnExecutionContext, SELF, applyD1Migra
 import { beforeAll, describe, it, expect } from "vitest";
 import { adminRoutes } from "../src/admin";
 import { verifyToken, signToken } from "../src/shared";
+import { rateLimited, RL_WINDOW_MS } from "../src/index";
 
 const IncomingRequest = Request<unknown, IncomingRequestCfProperties>;
 
@@ -287,5 +288,46 @@ describe("router worker gabungan", () => {
 		const res = await SELF.fetch("https://example.com/api/login", { method: "OPTIONS" });
 		expect(res.status).toBe(204);
 		expect(res.headers.get("Access-Control-Allow-Methods")).toContain("POST");
+	});
+
+	/* ---------------- Anti-DDoS layer-7 (unit test limiter) ---------------- */
+
+	it("rateLimited: request ke-6 dalam jendela ditolak, lalu reset setelah 10 detik", () => {
+		const start = 1_700_000_000_000;
+		const key = "t:unit";
+		for (let i = 0; i < 5; i++) {
+			expect(rateLimited(key, 5, start + i)).toBe(false); // 5 pertama lolos
+		}
+		expect(rateLimited(key, 5, start + 5)).toBe(true); // ke-6 ditolak
+		expect(rateLimited(key, 5, start + 5)).toBe(true); // masih ditolak (belum lewat jendela)
+		// Setelah > RL_WINDOW_MS, jendela bergeser → request baru lolos lagi.
+		expect(rateLimited(key, 5, start + RL_WINDOW_MS + 1)).toBe(false);
+	});
+
+	it("rateLimited: key berbeda punya bucket terpisah (bukan global)", () => {
+		expect(rateLimited("t:ipA", 1, 1_700_000_000_000)).toBe(false);
+		expect(rateLimited("t:ipB", 1, 1_700_000_000_001)).toBe(false); // ipB tidak terpengaruh ipA
+	});
+
+	it("RateLimitDO (durable object): request ke-4 dalam jendela ditolak (max=3)", async () => {
+		const ns = (env as any).RATE_LIMITER;
+		if (!ns) {
+			// binding tak tersedia di runtime test — lewati (di versi prod ada).
+			return;
+		}
+		const id = ns.idFromName("testRateLimitUnit");
+		const stub = ns.get(id);
+		const q = (m: number) => `https://rl/?k=ip:do-test&m=${m}&g=1000000`;
+		for (let i = 0; i < 3; i++) {
+			const r = await stub.fetch(q(3));
+			const body = (await r.json()) as { ok: boolean };
+			expect(body.ok).toBe(true); // 3 pertama lolos
+		}
+		const r4 = await stub.fetch(q(3));
+		const body4 = (await r4.json()) as { ok: boolean };
+		expect(body4.ok).toBe(false); // ke-4 ditolak (per-IP max=3)
+		// IP lain tidak terblok (bucket terpisah)
+		const other = await ns.get(ns.idFromName("testRateLimitUnit2")).fetch(q(3));
+		expect(((await other.json()) as { ok: boolean }).ok).toBe(true);
 	});
 });
