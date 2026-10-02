@@ -105,7 +105,7 @@ export async function triggerWorkflows(env: Env, paksa = false): Promise<{ trigg
 
 	const rantaiId = getWitaDateString();
 
-	// 1. Cek Anti-Kembar: Jangan picu jika sudah ada runner v3 yang aktif
+	// 1. Cek Anti-Kembar: Jangan picu jika sudah ada runner v3 yang aktif atau mengantre
 	if (!paksa) {
 		const adaRunner = await hasActiveRunner(token);
 		if (adaRunner) {
@@ -114,14 +114,9 @@ export async function triggerWorkflows(env: Env, paksa = false): Promise<{ trigg
 		}
 	}
 
-	// 2. Cek Status Radio: Jangan picu jika radio sedang OFF-AIR
-	if (!paksa) {
-		const onAir = await isStreamOnAir();
-		if (!onAir) {
-			console.log("[WORKFLOW] Radio sedang OFF-AIR. Trigger dibatalkan untuk menghemat kuota runner.");
-			return { triggered: false, alasan: "STREAM_OFF_AIR" };
-		}
-	}
+	// 2. Watchdog 24 Jam: Jika TIDAK ADA runner aktif, SELALU hidupkan runner baru!
+	// Runner harus selalu standby di GitHub Actions agar saat siaran mulai,
+	// detik pertama audio langsung terekam tanpa menunggu antrean boot VM 2-5 menit.
 
 	// 3. Tentukan nomor sesi hari ini (via D1 kv_store)
 	let sesi = 1;
@@ -134,8 +129,8 @@ export async function triggerWorkflows(env: Env, paksa = false): Promise<{ trigg
 		console.warn("[WORKFLOW] Gagal baca/tulis sesi di D1, fallback ke sesi 1:", e);
 	}
 
-	// 4. Dispatch runner #1 untuk sesi ini
-	console.log(`[WORKFLOW] Memulai Runner v3: rantai=${rantaiId} nomor=1 sesi=${sesi}`);
+	// 4. Dispatch runner #1 untuk standby / rekam 24 jam
+	console.log(`[WATCHDOG 24H] Memulai Runner v3 standby: rantai=${rantaiId} nomor=1 sesi=${sesi}`);
 	const hasil = await dispatchV3(token, rantaiId, sesi);
 
 	if (hasil.ok) {
@@ -147,9 +142,23 @@ export async function triggerWorkflows(env: Env, paksa = false): Promise<{ trigg
 	}
 }
 
-/* GET /workflow — info status orkestrator */
-async function handleWorkflowInfo(_request: Request, env: Env): Promise<Response> {
+/* GET /workflow — info status orkestrator atau trigger manual (?trigger=1) */
+async function handleWorkflowInfo(request: Request, env: Env): Promise<Response> {
+	const url = new URL(request.url);
 	const rantaiId = getWitaDateString();
+
+	if (url.searchParams.get("trigger") === "1") {
+		const paksa = url.searchParams.get("paksa") === "1";
+		const hasil = await triggerWorkflows(env, paksa);
+		return json({
+			ok: hasil.triggered,
+			alasan: hasil.alasan,
+			sesi: hasil.sesi,
+			wita_date: rantaiId,
+			target_workflow: WORKFLOW_V3,
+		});
+	}
+
 	let sesiAktif = 1;
 	try {
 		const dataSesi = (await d1GetJson(env.DB, `sesi_${rantaiId}`)) as { sesi?: number } | null;
@@ -162,7 +171,7 @@ async function handleWorkflowInfo(_request: Request, env: Env): Promise<Response
 		wita_date: rantaiId,
 		sesi_tercatat_hari_ini: sesiAktif,
 		target_workflow: WORKFLOW_V3,
-		note: "Worker ini bertindak sebagai satpam anti-kembar dan pemicu terjadwal.",
+		note: "Worker ini bertindak sebagai watchdog 24 jam penjaga gawang runner estafet v3.",
 	});
 }
 

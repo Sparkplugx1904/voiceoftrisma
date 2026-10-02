@@ -104,6 +104,7 @@ jobs:
             --bagian "${{ inputs.bagian }}"
             --perintah "${{ inputs.perintah }}"
             --sesi "${{ inputs.sesi }}"
+            --tanpa-batas-waktu
           )
           if [ -n "${{ inputs.stats_url }}" ]; then
             CMD+=(--stats-url "${{ inputs.stats_url }}")
