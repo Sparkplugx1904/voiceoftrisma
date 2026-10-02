@@ -29,7 +29,20 @@ export interface Env {
 export interface Route {
 	method: string;
 	pattern: string;
-	handler: (request: Request, env: Env, ctx: ExecutionContext) => Response | Promise<Response>;
+	handler: (request: Request, env: Env, ctx: ExecutionContext) => Promise<Response> | Response;
+}
+
+/**
+ * True bila User-Agent jelas milik script/tool pemanen, bukan browser.
+ * Sumber 66k request ternyata crawler Python (aiohttp). Diblokir dini
+ * (403) — murah, sebelum table DO/D1. curl sengaja TIDAK diblokir supaya
+ * kerja verifikasi admin lewat terminal tetap jalan.
+ */
+const BOT_UA = /aiohttp|python-requests|python-urllib|urllib(3)?[\s/]|python-http|httpx|go-http-client|scrapy|libwww-perl|Java-1[0-9]|okhttp|PostmanRuntime|node-fetch|axios/i;
+
+export function isBotUA(ua: string | null): boolean {
+	if (!ua) return false; // tanpa UA bukan jaminan bot — jangan salah blok
+	return BOT_UA.test(ua);
 }
 
 /* ---------------- Response & CORS ---------------- */

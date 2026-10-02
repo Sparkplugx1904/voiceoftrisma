@@ -13,12 +13,13 @@
    *     workflow 07:00 UTC · metrics setiap menit
    ========================================================= */
 
-import { Env, Route, CORS_HEADERS, json, withCors } from "./shared";
+import { Env, Route, CORS_HEADERS, json, withCors, isBotUA } from "./shared";
 import { adminRoutes } from "./admin";
 import { statsRoutes, recordSample } from "./stream-stats";
 import { archiveRoutes, updateArchiveCache } from "./archive";
 import { metricsRoutes, updateMetrics } from "./metrics";
 import { workflowRoutes, triggerWorkflows } from "./workflow";
+import { streamRoutes } from "./stream";
 import { RateLimitDO } from "./rate-limit";
 // Re-export WAJIB: tanpa ini class DO tidak ikut ter-bundle oleh wrangler.
 export { RateLimitDO };
@@ -27,7 +28,7 @@ function handleRoot(_request: Request, _env: Env): Response {
 	return json({
 		ok: true,
 		service: "voiceoftrisma",
-		endpoints: ["/api/*", "/stats", "/archive", "/metrics", "/workflow"],
+		endpoints: ["/api/*", "/stats", "/archive", "/metrics", "/workflow", "/stream"],
 		time: new Date().toISOString(),
 	});
 }
@@ -39,6 +40,7 @@ const ROUTES: Route[] = [
 	...archiveRoutes,
 	...metricsRoutes,
 	...workflowRoutes,
+	...streamRoutes,
 ];
 
 const compiledRoutes = ROUTES.map((r) => ({ ...r, pattern: new URLPattern({ pathname: r.pattern }) }));
@@ -88,6 +90,12 @@ export default {
 		// Preflight CORS
 		if (request.method === "OPTIONS") {
 			return new Response(null, { status: 204, headers: CORS_HEADERS });
+		}
+
+		// Blokir dini crawler/tool script (sumber 66k = Python aiohttp) —
+		// murah: sebelum rate limiter & D1. Browser asli tidak tersentuh.
+		if (isBotUA(request.headers.get("user-agent"))) {
+			return withCors(json({ error: "Akses ditolak." }, 403));
 		}
 
 		// Anti-DDoS layer-7 — DUA TIER:
@@ -144,6 +152,7 @@ export default {
 		switch (event.cron) {
 			case "*/5 * * * *":
 				await recordSample(env);
+				await triggerWorkflows(env);
 				break;
 			case "*/30 * * * *":
 				await updateArchiveCache(env);
