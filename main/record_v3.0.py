@@ -30,6 +30,7 @@ Transkriptor TIDAK dijalankan di sini (laptop tidak kuat).
 import argparse
 import datetime
 import hashlib
+import hmac as _hmac_mod
 import json
 import os
 import shutil
@@ -75,8 +76,14 @@ except ImportError:
 # ---------- waktu ----------
 WITA = datetime.timezone(datetime.timedelta(hours=8))
 PEMILIK_JATUH = "Sparkplugx1904"
-REPO_JATUH = "voiceoftrisma"
+REPO_JATUH    = "voiceoftrisma"
 BERKAS_ALUR_V3 = "main+transcript_v3.0.yml"
+
+# URL Cloudflare Worker relay — override via env CLOUDFLARE_RELAY_URL
+CLOUDFLARE_RELAY_URL = os.environ.get(
+    "CLOUDFLARE_RELAY_URL",
+    "https://voiceoftrisma.anandapradnyana68.workers.dev"
+).rstrip("/")
 
 # Tahap cek sopan milikmu (jangan dihujani): (mulai, selesai, jeda)
 TAHAP = [
@@ -115,6 +122,201 @@ def repo_tujuan():
 
 def ambil_token():
     return (os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN") or "").strip()
+
+
+def ambil_relay_secret():
+    """Ambil RELAY_SECRET — kunci bersama untuk HMAC antar runner dan Cloudflare."""
+    return (os.environ.get("GH_RELAY_SECRET") or os.environ.get("RELAY_SECRET") or "").strip()
+
+
+# ---------- HMAC-SHA256 relay (keamanan antar VM) ----------
+
+def buat_tanda_hmac(rahasia: str, data: str) -> str:
+    """Buat tanda tangan HMAC-SHA256 format 'sha256=<hex>'.
+
+    data bisa berupa body JSON (POST) atau canonical query string (GET).
+    """
+    return "sha256=" + _hmac_mod.new(
+        rahasia.encode("utf-8"),
+        data.encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+
+
+# ---------- Waktu boot sesungguhnya ----------
+
+def waktu_boot_sesungguhnya() -> float:
+    """Ambil epoch seconds saat runner pertama kali dibuat via GitHub API.
+
+    Lebih akurat daripada time.time() karena mencakup waktu install deps.
+    Gagal → kembalikan time.time() sebagai fallback (cukup dekat).
+    """
+    token = ambil_token()
+    run_id = os.environ.get("GITHUB_RUN_ID", "")
+    if not token or not run_id:
+        log("[BOOT] tanpa token/run-id — gunakan waktu sekarang sebagai fallback.")
+        return time.time()
+    pemilik, repo = repo_tujuan()
+    try:
+        r = requests.get(
+            f"https://api.github.com/repos/{pemilik}/{repo}/actions/runs/{run_id}",
+            headers={"Authorization": f"Bearer {token}",
+                     "Accept": "application/vnd.github+json",
+                     "User-Agent": "voiceoftrisma-estafet/3.0"},
+            timeout=15,
+        )
+        if r.status_code == 200:
+            created_at = r.json().get("created_at", "")
+            # format ISO 8601: "2026-10-03T07:26:26Z"
+            dt = datetime.datetime.strptime(created_at, "%Y-%m-%dT%H:%M:%SZ")
+            dt = dt.replace(tzinfo=datetime.timezone.utc)
+            epoch = dt.timestamp()
+            log(f"[BOOT] waktu boot sesungguhnya: {created_at} ({int(time.time() - epoch)}d lalu)")
+            return epoch
+        log(f"[BOOT] GitHub API HTTP {r.status_code}, fallback ke waktu sekarang.")
+    except Exception as e:
+        log(f"[BOOT] gagal ambil waktu boot ({type(e).__name__}), fallback.")
+    return time.time()
+
+
+# ---------- Relay via Cloudflare Worker ----------
+
+def picu_penerus_via_worker(rantai_id, nomor_saya, tumpang, margin, sesi, induk_run_id=""):
+    """Minta Cloudflare Worker dispatch Runner penerus ke GitHub Actions.
+
+    Lebih aman dari panggilan langsung ke GitHub API karena GITHUB_TOKEN
+    hanya ada di Cloudflare secrets, bukan di env runner.
+    Kembalikan: "terpicu" | "gagal" | "tanpa-secret"
+    """
+    rahasia = ambil_relay_secret()
+    if not rahasia:
+        log("[RELAY] GH_RELAY_SECRET kosong — tidak bisa picu via Worker. Cek GitHub Secrets.")
+        return "tanpa-secret"
+
+    nomor_b = int(nomor_saya) + 1
+    run_id = os.environ.get("GITHUB_RUN_ID", induk_run_id)
+    badan = {
+        "rantai_id":    str(rantai_id),
+        "nomor_b":      nomor_b,
+        "tumpang":      int(tumpang),
+        "margin":       int(margin),
+        "sesi":         int(sesi),
+        "induk_run_id": str(run_id),
+    }
+    badan_json = json.dumps(badan, separators=(",", ":"), sort_keys=True)
+    tanda = buat_tanda_hmac(rahasia, badan_json)
+
+    url = f"{CLOUDFLARE_RELAY_URL}/relay/trigger"
+    for coba in range(1, 4):
+        try:
+            r = requests.post(
+                url,
+                data=badan_json,
+                headers={"Content-Type": "application/json",
+                         "X-Relay-Sig": tanda,
+                         "User-Agent": "voiceoftrisma-estafet/3.0"},
+                timeout=20,
+            )
+            if r.status_code == 200:
+                log(f"[RELAY] Runner #{nomor_b} berhasil dipicu via Cloudflare (coba {coba}).")
+                return "terpicu"
+            if r.status_code in (401, 403):
+                log(f"[RELAY] Ditolak HTTP {r.status_code} — RELAY_SECRET mungkin beda. Batal.")
+                return "gagal"
+            log(f"[RELAY] Trigger coba {coba} HTTP {r.status_code}, ulang...")
+        except Exception as e:
+            log(f"[RELAY] Trigger coba {coba} galat {type(e).__name__}, ulang...")
+        time.sleep(5 * coba)
+    log("[RELAY] Semua coba trigger gagal.")
+    return "gagal"
+
+
+def sinyal_siap_ke_worker(rantai_id, nomor):
+    """Umumkan ke Cloudflare Worker bahwa runner ini sudah mulai merekam.
+
+    Dipanggil oleh Runner B begitu chunk pertama selesai.
+    Runner A akan polling /relay/status dan segera cut saat menerima sinyal ini.
+    """
+    rahasia = ambil_relay_secret()
+    if not rahasia:
+        log("[RELAY-SIAP] GH_RELAY_SECRET kosong — sinyal siap tidak terkirim.")
+        return False
+
+    run_id = os.environ.get("GITHUB_RUN_ID", "")
+    badan = {"rantai_id": str(rantai_id), "nomor": int(nomor), "run_id": run_id}
+    badan_json = json.dumps(badan, separators=(",", ":"), sort_keys=True)
+    tanda = buat_tanda_hmac(rahasia, badan_json)
+
+    url = f"{CLOUDFLARE_RELAY_URL}/relay/ready"
+    for coba in range(1, 4):
+        try:
+            r = requests.post(
+                url,
+                data=badan_json,
+                headers={"Content-Type": "application/json",
+                         "X-Relay-Sig": tanda,
+                         "User-Agent": "voiceoftrisma-estafet/3.0"},
+                timeout=15,
+            )
+            if r.status_code == 200:
+                log(f"[RELAY-SIAP] Sinyal 'Runner #{nomor} siap merekam' terkirim ke Cloudflare.")
+                return True
+            log(f"[RELAY-SIAP] HTTP {r.status_code} coba {coba}, ulang...")
+        except Exception as e:
+            log(f"[RELAY-SIAP] Galat coba {coba}: {type(e).__name__}, ulang...")
+        time.sleep(3 * coba)
+    log("[RELAY-SIAP] Gagal kirim sinyal siap setelah 3x.")
+    return False
+
+
+def tunggu_penerus_siap(rantai_id, nomor_b, batas_tunggu=900):
+    """Poll Cloudflare Worker sampai Runner B mengumumkan dirinya siap merekam.
+
+    Dipanggil Runner A setelah mempicu Runner B.
+    batas_tunggu=900 detik (15 menit) — jika B tidak konfirmasi dalam 15 menit,
+    A cut saja (daripada terus merekam sia-sia melewati batas VM).
+    Kembalikan: True (B siap), False (timeout/gagal).
+    """
+    rahasia = ambil_relay_secret()
+    if not rahasia:
+        log("[RELAY-POLL] GH_RELAY_SECRET kosong — tidak bisa poll. Asumsikan B siap.")
+        return True  # fail-open: jangan blokir A selamanya
+
+    data_sign = f"rantai_id={rantai_id}&nomor={nomor_b}"
+    tanda = buat_tanda_hmac(rahasia, data_sign)
+    url = (f"{CLOUDFLARE_RELAY_URL}/relay/status"
+           f"?rantai_id={rantai_id}&nomor={nomor_b}")
+
+    mulai = time.monotonic()
+    putaran = 0
+    while time.monotonic() - mulai < batas_tunggu:
+        putaran += 1
+        try:
+            r = requests.get(
+                url,
+                headers={"X-Relay-Sig": tanda,
+                         "User-Agent": "voiceoftrisma-estafet/3.0"},
+                timeout=10,
+            )
+            if r.status_code == 200:
+                data = r.json()
+                if data.get("siap"):
+                    log(f"[RELAY-POLL] Penerus #{nomor_b} SIAP merekam! "
+                        f"(putaran {putaran}, {int(time.monotonic()-mulai)}d menunggu)")
+                    return True
+                alasan = data.get("alasan", "?")
+                if putaran % 6 == 1:  # log tiap ~30 detik
+                    log(f"[RELAY-POLL] #{putaran} penerus #{nomor_b} belum siap ({alasan}), "
+                        f"tunggu 5d... ({int(time.monotonic()-mulai)}d/{batas_tunggu}d)")
+            else:
+                log(f"[RELAY-POLL] HTTP {r.status_code}, coba lagi 5d...")
+        except Exception as e:
+            log(f"[RELAY-POLL] Galat ({type(e).__name__}), coba lagi 5d...")
+        time.sleep(5)
+
+    log(f"[RELAY-POLL] Batas tunggu {batas_tunggu}d habis — penerus #{nomor_b} tidak konfirmasi. "
+        f"A akan cut dan upload sekarang.")
+    return False
 
 
 # ---------- berhenti / cutoff ----------
@@ -160,22 +362,26 @@ def jeda_tahap(detik_berlalu):
 
 
 def tunggu_siaran(url_stats, url_stream, mulai=None, titik_picu=None, max_umur=None,
-                  rantai_id=None, nomor=1, tumpang=600, margin=180,
+                  rantai_id=None, nomor=1, tumpang=900, margin=300,
                   perintah="jalan", jam_tutup="18:30", tanpa_batas_waktu=False,
                   sesi=1, sudah_picu=False, status_picu="belum-waktunya",
                   picu_ulang_pada=0.0):
     """Polling sopan sampai ON-AIR dengan dukungan estafet standby 24 jam.
 
+    Timer umur diukur dari t_mulai yang dikirim pemanggil — idealnya epoch
+    waktu boot sesungguhnya (dari GitHub API), bukan time.monotonic() baru.
+
     Kembalikan tuple (status, sudah_picu, status_picu, picu_ulang_pada):
-      status: "on-air" (mulai rekam detik 0) | "selesai" (umur habis) | "batal"
+      status: "on-air" | "selesai" (umur habis) | "batal"
     """
     log(f"[TUNGGU] menunggu siaran — cek ke: {url_stats}")
     awal_jam = kini_wita().hour
     putaran = 0
-    t_mulai = mulai if mulai is not None else time.monotonic()
-    t_picu = titik_picu if titik_picu is not None else 19200
-    t_max = max_umur if max_umur is not None else 19200
-    r_id = rantai_id or kini_wita().strftime("%Y-%m-%d")
+    # t_mulai: epoch seconds (bukan monotonic) agar bisa dibandingkan dengan time.time()
+    t_mulai = mulai if mulai is not None else time.time()
+    t_picu  = titik_picu if titik_picu is not None else 18600  # 5j10m dari boot
+    t_max   = max_umur if max_umur is not None else 19800      # 5j30m dari boot
+    r_id    = rantai_id or kini_wita().strftime("%Y-%m-%d")
 
     while True:
         if ARGS and sudah_diminta_berhenti(perintah=getattr(ARGS, "perintah", perintah)):
@@ -193,26 +399,29 @@ def tunggu_siaran(url_stats, url_stream, mulai=None, titik_picu=None, max_umur=N
         jeda = jeda_tahap(detik)
         putaran += 1
 
-        umur = time.monotonic() - t_mulai
-        # 1. Cek apakah sudah harus membangunkan runner penerus untuk estafet standby
-        if not sudah_picu and umur >= t_picu and time.monotonic() >= picu_ulang_pada:
-            log(f"[ESTAFET STANDBY] umur runner #{nomor} {int(umur)}d >= titik picu {t_picu}d. Bangunkan penerus #{nomor + 1}...")
-            status_picu = picu_penerus(
-                r_id, int(nomor), int(tumpang),
-                perintah=perintah, jam_tutup=jam_tutup,
-                tanpa_batas_waktu=tanpa_batas_waktu, margin=margin, sesi=sesi
+        # umur dihitung dari epoch time (bisa bandingkan dengan waktu boot aktual)
+        umur = time.time() - t_mulai
+
+        # 1. Cek apakah sudah waktunya membangunkan runner penerus
+        if not sudah_picu and umur >= t_picu and time.time() >= picu_ulang_pada:
+            log(f"[ESTAFET STANDBY] umur #{nomor} {int(umur)}d >= titik_picu {t_picu}d. "
+                f"Picu penerus #{nomor + 1} via Cloudflare Worker...")
+            status_picu = picu_penerus_via_worker(
+                r_id, int(nomor), int(tumpang), int(margin), int(sesi)
             )
-            log(f"[ESTAFET STANDBY] status pemicu penerus: {status_picu}")
-            if status_picu in ("terpicu", "sudah-ada", "sudah-pernah"):
+            log(f"[ESTAFET STANDBY] status picu penerus: {status_picu}")
+            if status_picu == "terpicu":
                 sudah_picu = True
-            elif status_picu == "gagal-api":
-                picu_ulang_pada = time.monotonic() + 120
+            elif status_picu in ("gagal", "tanpa-secret"):
+                # Coba ulang 2 menit kemudian
+                picu_ulang_pada = time.time() + 120
             else:
                 sudah_picu = True
 
         # 2. Cek apakah umur runner sudah habis saat standby
         if umur >= t_max:
-            log(f"[ESTAFET STANDBY] umur runner #{nomor} {int(umur)}d >= batas {t_max}d. Selesai giliran standby, serahkan ke penerus.")
+            log(f"[ESTAFET STANDBY] umur #{nomor} {int(umur)}d >= batas {t_max}d. "
+                f"Selesai giliran standby, serahkan ke penerus.")
             return "selesai", sudah_picu, status_picu, picu_ulang_pada
 
         # 3. Cek apakah pemancar sudah ON-AIR
@@ -691,10 +900,10 @@ def jalan_utama():
     urai.add_argument("--nomor", type=int, default=1)
     urai.add_argument("--sesi", type=int, default=1, help="Nomor sesi tayang siaran pada hari itu (1, 2, ...)")
     urai.add_argument("--induk-run-id", default="")
-    urai.add_argument("--tumpang", type=int, default=600)  # 10 menit overlap
-    urai.add_argument("--margin", type=int, default=180)   # 3 menit toleransi antrean GitHub
-    urai.add_argument("--bagian", type=int, default=600)
-    urai.add_argument("--max-umur", type=int, default=19200)
+    urai.add_argument("--tumpang", type=int, default=900)   # 15 menit overlap
+    urai.add_argument("--margin", type=int, default=300)    # 5 menit toleransi antrean
+    urai.add_argument("--bagian", type=int, default=600)    # chunk 10 menit
+    urai.add_argument("--max-umur", type=int, default=19800)  # 5j30m dari boot
     urai.add_argument("--jam-tutup", default="18:30")
     urai.add_argument("--tanpa-batas-waktu", action="store_true")
     urai.add_argument("--stream-url", default=os.environ.get("STREAM_URL", ""))
@@ -713,7 +922,6 @@ def jalan_utama():
         log("[BERHENTI] perintah berhenti sejak awal. Keluar tanpa merekam.")
         return 0
     if lewat_jam_tutup(ARGS.jam_tutup, ARGS.tanpa_batas_waktu):
-        # Bangun kesiangan (misal antrean lama): jangan rekam sia-sia.
         log("[TUTUP] sudah lewat jam tutup sejak awal. Keluar tanpa merekam.")
         return 0
     if not ARGS.stream_url:
@@ -729,38 +937,42 @@ def jalan_utama():
 
     # Anti kembar saat bangun: kalau API bisa dihubungi dan ternyata
     # sudah ada yang bernomor sama dan lebih tua, mundur agar tidak dobel.
-    # Mode lokal (tanpa token) -> lewati cek, jangan blokir uji.
     if ambil_token():
         pemilik, repo = repo_tujuan()
         if penerus_sudah_hidup(pemilik, repo, ambil_token(), ARGS.rantai_id,
                                int(ARGS.nomor), run_saya=""):
-            # Hati-hati: cek ini juga menemukan DIRI SENDIRI bila baru saja
-            # antre. Bedakan: kalau yang hidup run-id-nya sama dengan saya,
-            # itu saya sendiri -> lanjut. Kalau beda -> mundur.
             log("[KEMBAR] ada lari bernomor sama. Cek run-id...")
             saya = os.environ.get("GITHUB_RUN_ID", "")
-            # bila tidak bisa bedakan (tanpa GITHUB_RUN_ID = lokal), lanjut
             if saya:
                 log("[MUNDUR] kembar lebih tua sudah jalan, saya mundur.")
                 return 0
 
-    mulai = time.monotonic()
+    # ===== TIMER DARI WAKTU BOOT SESUNGGUHNYA (bukan time.time() sekarang) =====
+    # Ambil created_at run ini dari GitHub API — mencakup install deps, checkout, dll.
+    # Hasilnya epoch float. Seluruh logika umur memakai time.time() - mulai_boot.
+    mulai_boot = waktu_boot_sesungguhnya()
+    elapsed_saat_mulai = time.time() - mulai_boot
+    log(f"[BOOT] elapsed sejak boot: {int(elapsed_saat_mulai)}d "
+        f"(install+checkout sudah memakan {int(elapsed_saat_mulai)}d dari quota {ARGS.max_umur}d)")
+
     tanggal = kini_wita().strftime("%d-%m-%Y")
     dasar = f"VOT-Denpasar_{tanggal}_{ARGS.sesi}_rantai{ARGS.rantai_id}_n{ARGS.nomor}"
     bagian_daftar, manifest = [], []
     batas_total = ARGS.durasi or None
     sudah_rekam = 0
     idx = 0
-    # Titik bangunkan penerus: tumpang + margin SEBELUM umur habis, agar B
-    # sempat mendengar ekor A (siaran langsung tak bisa diulang).
+
+    # Titik bangunkan penerus: tumpang + margin SEBELUM batas max_umur dari boot
     titik_picu = max(0, int(ARGS.max_umur) - int(ARGS.tumpang) - int(ARGS.margin))
     sudah_picu, status_picu = False, "belum-waktunya"
     picu_ulang_pada = 0.0
-    log(f"[ESTAFET] titik picu: umur {titik_picu}d, berhenti: umur {ARGS.max_umur}d.")
+    log(f"[ESTAFET] titik_picu: {titik_picu}d dari boot, batas: {ARGS.max_umur}d dari boot.")
 
     if not ARGS.lewati_cek:
         status_tunggu, sudah_picu, status_picu, picu_ulang_pada = tunggu_siaran(
-            ARGS.stats_url, ARGS.stream_url, mulai=mulai, titik_picu=titik_picu,
+            ARGS.stats_url, ARGS.stream_url,
+            mulai=mulai_boot,          # epoch seconds — titik nol dari boot
+            titik_picu=titik_picu,
             max_umur=ARGS.max_umur, rantai_id=ARGS.rantai_id, nomor=int(ARGS.nomor),
             tumpang=int(ARGS.tumpang), margin=int(ARGS.margin), perintah=ARGS.perintah,
             jam_tutup=ARGS.jam_tutup, tanpa_batas_waktu=ARGS.tanpa_batas_waktu,
@@ -777,6 +989,7 @@ def jalan_utama():
         log("[LEWAT] cek siaran dilewati.")
 
     off_air_selesai = False
+    sudah_kirim_sinyal_siap = False  # (untuk runner B: sudah bilang siap ke A?)
     while True:
         if sudah_diminta_berhenti(ARGS.map_rekaman, ARGS.perintah):
             log("[BERHENTI] berhenti di antara bagian.")
@@ -784,24 +997,28 @@ def jalan_utama():
         if lewat_jam_tutup(ARGS.jam_tutup, ARGS.tanpa_batas_waktu):
             log("[TUTUP] jam tutup tercapai. Setop merekam.")
             break
-        umur = time.monotonic() - mulai
+
+        # Umur dihitung dari waktu boot sesungguhnya (epoch)
+        umur = time.time() - mulai_boot
         if umur >= ARGS.max_umur:
             log(f"[ESTAFET] umur {int(umur)}d >= maks {ARGS.max_umur}d. Setop, tulis ekor.")
             break
-        # Bangunkan B lebih awal, TAPI tetap lanjut merekam (tumpang)!
-        if not sudah_picu and umur >= titik_picu and time.monotonic() >= picu_ulang_pada:
-            status_picu = picu_penerus(
+
+        # ═══ PICU RUNNER PENERUS LEWAT CLOUDFLARE (saat umur >= titik_picu) ═══
+        # A lanjut merekam setelah picu (tumpang 15 menit) sampai B konfirmasi siap.
+        if not sudah_picu and umur >= titik_picu and time.time() >= picu_ulang_pada:
+            status_picu = picu_penerus_via_worker(
                 ARGS.rantai_id, int(ARGS.nomor), int(ARGS.tumpang),
-                perintah=ARGS.perintah, jam_tutup=ARGS.jam_tutup,
-                tanpa_batas_waktu=ARGS.tanpa_batas_waktu, margin=ARGS.margin,
-                sesi=ARGS.sesi)
-            log(f"[ESTAFET] status pemicu: {status_picu}")
-            if status_picu in ("terpicu", "sudah-ada", "sudah-pernah"):
+                int(ARGS.margin), int(ARGS.sesi)
+            )
+            log(f"[ESTAFET] status picu penerus: {status_picu}")
+            if status_picu == "terpicu":
                 sudah_picu = True
-            elif status_picu == "gagal-api":
-                picu_ulang_pada = time.monotonic() + 120  # coba lagi 2 mnt
+            elif status_picu in ("gagal", "tanpa-secret"):
+                picu_ulang_pada = time.time() + 120  # coba ulang 2 menit lagi
             else:
-                sudah_picu = True  # dilewat-*: tak perlu coba lagi
+                sudah_picu = True
+
         sisa = None
         if batas_total is not None:
             sisa = batas_total - sudah_rekam
@@ -845,6 +1062,25 @@ def jalan_utama():
         bagian_daftar.append(berkas)
         manifest.append(info)
         sudah_rekam += panjang
+
+        # ═══ SINYAL "SIAP" UNTUK RUNNER SEBELUMNYA (Runner B) ═══
+        # B mengirimkan sinyal ke Cloudflare begitu chunk pertama selesai.
+        # Runner A yang sedang menunggu akan segera cut dan upload setelah menerima ini.
+        if int(ARGS.nomor) > 1 and not sudah_kirim_sinyal_siap and idx == 0:
+            sudah_kirim_sinyal_siap = sinyal_siap_ke_worker(ARGS.rantai_id, int(ARGS.nomor))
+
+        # ═══ TUNGGU RUNNER PENERUS SIAP (Runner A) ═══
+        # Setelah A memicu B, A terus rekam tapi mulai poll apakah B sudah siap.
+        # Begitu B konfirmasi, A selesaikan chunk ini lalu cut dan upload.
+        if sudah_picu and not (int(ARGS.nomor) > 1 and not sudah_kirim_sinyal_siap):
+            # Hanya poll jika A (nomor=1 dst) dan B sudah dipicu
+            if int(ARGS.nomor) == 1 or (int(ARGS.nomor) > 1 and sudah_kirim_sinyal_siap):
+                nomor_b = int(ARGS.nomor) + 1
+                log(f"[RELAY-POLL] Cek apakah penerus #{nomor_b} sudah siap merekam...")
+                if tunggu_penerus_siap(ARGS.rantai_id, nomor_b, batas_tunggu=900):
+                    log(f"[ESTAFET] Penerus #{nomor_b} siap! A segera selesaikan chunk ini dan upload.")
+                    break  # A keluar dari loop rekam, lanjut ke upload
+
         # denyut hidup untuk tombol BERHENTI manual
         try:
             open(os.path.join(ARGS.map_rekaman, f".denyut_{ARGS.rantai_id}_{ARGS.nomor}"), "w").write(
@@ -865,11 +1101,11 @@ def jalan_utama():
         ARGS.map_rekaman, ARGS.perintah)
     sesi_berikutnya = ARGS.sesi + 1 if off_air_selesai else ARGS.sesi
     if not tutup and not sudah_picu:
-        # Lari pendek / pergantian sesi: ketuk penerus sekarang
-        status_picu = picu_penerus(ARGS.rantai_id, int(ARGS.nomor), int(ARGS.tumpang),
-                                   perintah=ARGS.perintah, jam_tutup=ARGS.jam_tutup,
-                                   tanpa_batas_waktu=ARGS.tanpa_batas_waktu,
-                                   margin=ARGS.margin, sesi=sesi_berikutnya)
+        # Lari pendek / pergantian sesi: picu penerus lewat Cloudflare Worker
+        status_picu = picu_penerus_via_worker(
+            ARGS.rantai_id, int(ARGS.nomor), int(ARGS.tumpang),
+            int(ARGS.margin), int(sesi_berikutnya)
+        )
         log(f"[ESTAFET] status pemicu akhir: {status_picu}")
     elif tutup:
         log("[ESTAFET] rantai selesai (tutup/berhenti). Tidak memicu penerus.")

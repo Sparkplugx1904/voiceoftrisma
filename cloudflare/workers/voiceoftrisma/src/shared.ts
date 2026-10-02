@@ -18,6 +18,8 @@ export interface Env {
 	ADMIN_PASSWORD: string;
 	SESSION_SECRET: string;
 	GITHUB_TOKEN: string;
+	// Kunci bersama antar runner VM — wajib sama dengan GH Secret GH_RELAY_SECRET
+	RELAY_SECRET: string;
 	// (opsional) tuning anti-DDoS layer-7 — nilai string; default tertanam di index.ts
 	MAX_REQ_IP_10S?: string;
 	MAX_REQ_GLOBAL_10S?: string;

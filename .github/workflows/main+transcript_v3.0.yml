@@ -1,8 +1,9 @@
 name: Estafet v3.0 (pekerja ke pekerja)
 
-# Rantai estafet: A membangunkan B langsung via API (dari record_v3.0.py).
-# Tanpa jadwal otomatis — hanya dibangunkan. Transkriptor MATI bawaan
-# (laptop tidak kuat; nyalakan hanya bila mau_transkrip=true).
+# Rantai estafet: A memicu B lewat Cloudflare Worker (relay aman HMAC).
+# Cloudflare Worker yang kemudian dispatch GitHub Actions Runner B.
+# Runner B mengumumkan "siap merekam" ke Cloudflare, A menunggu sinyal ini
+# sebelum cut dan upload. Transkriptor MATI bawaan (laptop tidak kuat).
 
 on:
   workflow_dispatch:
@@ -12,23 +13,23 @@ on:
         required: true
         default: "manual"
       nomor:
-        description: "Nomor lari dalam rantai (1,2,3...)"
+        description: "Nomor lari dalam rantai (1, 2, 3...)"
         required: true
         default: "1"
       tumpang:
-        description: "Tumpang tindih detik (ekor A vs kepala B, default 10 menit)"
+        description: "Durasi overlap A & B sama-sama rekam (detik, default 15 menit)"
         required: false
-        default: "600"
+        default: "900"
       margin:
-        description: "Lanjutan rekam A setelah mengetuk B (detik, buffer antrean)"
+        description: "Buffer waktu B boot + mulai rekam sebelum A cut (detik)"
         required: false
-        default: "180"
+        default: "300"
       max_umur:
-        description: "Umur maks satu lari detik (uji live: isi 300)"
+        description: "Batas umur runner dari waktu boot (detik, default 5j30m)"
         required: false
-        default: "19200"
+        default: "19800"
       bagian:
-        description: "Panjang tiap potongan detik (uji live: isi 60)"
+        description: "Panjang tiap chunk rekaman (detik, uji live: isi 60)"
         required: false
         default: "600"
       induk_run_id:
@@ -44,11 +45,11 @@ on:
         required: false
         default: "false"
       stats_url:
-        description: "URL stats icecast (kosongkan = pakai default argparse)"
+        description: "URL stats icecast (kosongkan = pakai default)"
         required: false
         default: ""
       lewati_cek:
-        description: "true = langsung rekam tanpa tunggu ON-AIR (untuk uji live)"
+        description: "true = langsung rekam tanpa tunggu ON-AIR (uji live)"
         required: false
         default: "false"
       sesi:
@@ -92,6 +93,9 @@ jobs:
           STREAM_URL: ${{ secrets.STREAM_URL }}
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Kunci relay antar VM (harus sama dengan RELAY_SECRET di Cloudflare Worker)
+          GH_RELAY_SECRET: ${{ secrets.GH_RELAY_SECRET }}
+          CLOUDFLARE_RELAY_URL: https://voiceoftrisma.anandapradnyana68.workers.dev
         run: |
           mkdir -p recordings recordings/warisan
           CMD=(python3 -u main/record_v3.0.py
