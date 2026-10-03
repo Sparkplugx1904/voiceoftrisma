@@ -18,35 +18,18 @@ export interface Env {
 	ADMIN_PASSWORD: string;
 	SESSION_SECRET: string;
 	GITHUB_TOKEN: string;
-	// Kunci bersama antar runner VM — wajib sama dengan GH Secret GH_RELAY_SECRET
-	RELAY_SECRET: string;
 	// (opsional) tuning anti-DDoS layer-7 — nilai string; default tertanam di index.ts
 	MAX_REQ_IP_10S?: string;
 	MAX_REQ_GLOBAL_10S?: string;
 	// Durable Object rate limiter (shared lintas-isolate). Opsional supaya
 	// env test / dev tanpa binding tidak crash (fail-open).
 	RATE_LIMITER?: DurableObjectNamespace;
-	// Durable Object WebSocket relay & log hub untuk runner VM
-	TUNNEL_HUB?: DurableObjectNamespace;
 }
 
 export interface Route {
 	method: string;
 	pattern: string;
-	handler: (request: Request, env: Env, ctx: ExecutionContext) => Promise<Response> | Response;
-}
-
-/**
- * True bila User-Agent jelas milik script/tool pemanen, bukan browser.
- * Sumber 66k request ternyata crawler Python (aiohttp). Diblokir dini
- * (403) — murah, sebelum table DO/D1. curl sengaja TIDAK diblokir supaya
- * kerja verifikasi admin lewat terminal tetap jalan.
- */
-const BOT_UA = /aiohttp|python-requests|python-urllib|urllib(3)?[\s/]|python-http|httpx|go-http-client|scrapy|libwww-perl|Java-1[0-9]|okhttp|PostmanRuntime|node-fetch|axios/i;
-
-export function isBotUA(ua: string | null): boolean {
-	if (!ua) return false; // tanpa UA bukan jaminan bot — jangan salah blok
-	return BOT_UA.test(ua);
+	handler: (request: Request, env: Env, ctx: ExecutionContext) => Response | Promise<Response>;
 }
 
 /* ---------------- Response & CORS ---------------- */
@@ -70,9 +53,6 @@ export const CORS_HEADERS: Record<string, string> = {
 };
 
 export function withCors(response: Response): Response {
-	if (response.status === 101 || (response as any).webSocket) {
-		return response;
-	}
 	const headers = new Headers(response.headers);
 	for (const [k, v] of Object.entries(CORS_HEADERS)) headers.set(k, v);
 	return new Response(response.body, { status: response.status, headers });
@@ -204,117 +184,3 @@ export async function d1SetJson(db: D1Database, key: string, value: unknown): Pr
 		.bind(key, JSON.stringify(value), Date.now())
 		.run();
 }
-
-/* ---------------- Verifikasi Keamanan Kontrol Runner (Anti-Exploit & Anti-Replay) ---------------- */
-
-export async function hmacSha256Hex(secret: string, data: string): Promise<string> {
-	const key = await crypto.subtle.importKey(
-		"raw",
-		new TextEncoder().encode(secret),
-		{ name: "HMAC", hash: "SHA-256" },
-		false,
-		["sign"]
-	);
-	const sig = await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(data));
-	return Array.from(new Uint8Array(sig))
-		.map((b) => b.toString(16).padStart(2, "0"))
-		.join("");
-}
-
-export interface ControlAuthResult {
-	authorized: boolean;
-	caller?: "admin" | "runner";
-	error?: string;
-}
-
-/**
- * Verifikasi otentikasi ketat untuk endpoint pengendali eksekusi runner & relay.
- * Menghalau serangan:
- * 1. Unauthorized Access: Menolak siapapun tanpa token admin atau rahasia runner.
- * 2. Replay Attack: Menolak request usang (> 90 detik) atau clock-drift.
- * 3. Timing Side-Channel Attack: Verifikasi konstan-waktu (timingSafeEqual).
- */
-export async function verifyControlAuth(
-	request: Request,
-	env: Env,
-	payloadToVerify?: string
-): Promise<ControlAuthResult> {
-	// 1. Cek Admin Session Bearer Token atau Direct Secret Key Header
-	const authHeader = request.headers.get("Authorization") || "";
-	if (authHeader.startsWith("Bearer ")) {
-		const token = authHeader.slice(7).trim();
-		// Cek token sesi admin
-		const user = await verifyToken(env, token);
-		if (user) {
-			return { authorized: true, caller: "admin" };
-		}
-		// Cek jika bearer token adalah RELAY_SECRET atau SESSION_SECRET langsung
-		if (env.RELAY_SECRET && timingSafeEqual(token, env.RELAY_SECRET)) {
-			return { authorized: true, caller: "admin" };
-		}
-		if (env.SESSION_SECRET && timingSafeEqual(token, env.SESSION_SECRET)) {
-			return { authorized: true, caller: "admin" };
-		}
-	}
-
-	const directKey = request.headers.get("X-Admin-Key") || request.headers.get("X-Relay-Key") || "";
-	if (directKey) {
-		if (env.RELAY_SECRET && timingSafeEqual(directKey, env.RELAY_SECRET)) {
-			return { authorized: true, caller: "admin" };
-		}
-		if (env.SESSION_SECRET && timingSafeEqual(directKey, env.SESSION_SECRET)) {
-			return { authorized: true, caller: "admin" };
-		}
-	}
-
-	// 2. Cek HMAC Runner Signature
-	const relaySecret = env.RELAY_SECRET;
-	if (!relaySecret) {
-		console.error("[SECURITY] RELAY_SECRET belum dikonfigurasi di Worker.");
-		return { authorized: false, error: "RELAY_SECRET_NOT_CONFIGURED" };
-	}
-
-	const url = new URL(request.url);
-	const sigHeader = request.headers.get("X-Relay-Sig") || url.searchParams.get("sig") || "";
-	const tsHeader = request.headers.get("X-Relay-Timestamp") || url.searchParams.get("ts") || "";
-
-	if (!sigHeader) {
-		return { authorized: false, error: "AUTHENTICATION_REQUIRED" };
-	}
-
-	const cleanSig = sigHeader.startsWith("sha256=") ? sigHeader.slice(7) : sigHeader;
-
-	// Validasi Timestamp Anti-Replay (maksimal selisih ±90 detik)
-	if (tsHeader) {
-		const ts = Number(tsHeader);
-		const now = Math.floor(Date.now() / 1000);
-		if (isNaN(ts) || Math.abs(now - ts) > 90) {
-			console.warn(`[SECURITY] Replay attack dicegah: timestamp selisih ${Math.abs(now - ts)}s.`);
-			return { authorized: false, error: "TIMESTAMP_EXPIRED" };
-		}
-	}
-
-	// Verifikasi Signature konstan-waktu
-	const dataCandidate1 = tsHeader && payloadToVerify ? `${tsHeader}:${payloadToVerify}` : null;
-	const dataCandidate2 = payloadToVerify || "";
-
-	try {
-		if (dataCandidate1) {
-			const expected1 = await hmacSha256Hex(relaySecret, dataCandidate1);
-			if (timingSafeEqual(cleanSig, expected1)) {
-				return { authorized: true, caller: "runner" };
-			}
-		}
-		if (dataCandidate2) {
-			const expected2 = await hmacSha256Hex(relaySecret, dataCandidate2);
-			if (timingSafeEqual(cleanSig, expected2)) {
-				return { authorized: true, caller: "runner" };
-			}
-		}
-	} catch (e) {
-		console.warn("[SECURITY] Galat saat verifikasi HMAC:", e);
-	}
-
-	return { authorized: false, error: "INVALID_SIGNATURE" };
-}
-

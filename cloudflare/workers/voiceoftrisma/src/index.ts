@@ -13,24 +13,21 @@
    *     workflow 07:00 UTC · metrics setiap menit
    ========================================================= */
 
-import { Env, Route, CORS_HEADERS, json, withCors, isBotUA } from "./shared";
+import { Env, Route, CORS_HEADERS, json, withCors } from "./shared";
 import { adminRoutes } from "./admin";
 import { statsRoutes, recordSample } from "./stream-stats";
 import { archiveRoutes, updateArchiveCache } from "./archive";
 import { metricsRoutes, updateMetrics } from "./metrics";
 import { workflowRoutes, triggerWorkflows } from "./workflow";
-import { streamRoutes } from "./stream";
-import { relayRoutes } from "./relay";
-import { tunnelRoutes, TunnelHubDO } from "./tunnel";
 import { RateLimitDO } from "./rate-limit";
 // Re-export WAJIB: tanpa ini class DO tidak ikut ter-bundle oleh wrangler.
-export { RateLimitDO, TunnelHubDO };
+export { RateLimitDO };
 
 function handleRoot(_request: Request, _env: Env): Response {
 	return json({
 		ok: true,
 		service: "voiceoftrisma",
-		endpoints: ["/api/*", "/stats", "/archive", "/metrics", "/workflow", "/relay/*", "/tunnel/*", "/stream"],
+		endpoints: ["/api/*", "/stats", "/archive", "/metrics", "/workflow"],
 		time: new Date().toISOString(),
 	});
 }
@@ -42,9 +39,6 @@ const ROUTES: Route[] = [
 	...archiveRoutes,
 	...metricsRoutes,
 	...workflowRoutes,
-	...relayRoutes,
-	...tunnelRoutes,
-	...streamRoutes,
 ];
 
 const compiledRoutes = ROUTES.map((r) => ({ ...r, pattern: new URLPattern({ pathname: r.pattern }) }));
@@ -96,12 +90,6 @@ export default {
 			return new Response(null, { status: 204, headers: CORS_HEADERS });
 		}
 
-		// Blokir dini crawler/tool script (sumber 66k = Python aiohttp) —
-		// murah: sebelum rate limiter & D1. Browser asli tidak tersentuh.
-		if (isBotUA(request.headers.get("user-agent"))) {
-			return withCors(json({ error: "Akses ditolak." }, 403));
-		}
-
 		// Anti-DDoS layer-7 — DUA TIER:
 		//  1) fast-path in-memory (per-isolate): serap lonjakan lokal dengan murah.
 		//  2) durable-object "Global": counter TERPUSAT lintas-isolate (per-IP +
@@ -140,11 +128,7 @@ export default {
 			if (!route.pattern.exec(normalized)) continue;
 
 			try {
-				const res = await route.handler(request, env, ctx);
-				if (res.status === 101 || (res as any).webSocket) {
-					return res;
-				}
-				return withCors(res);
+				return withCors(await route.handler(request, env, ctx));
 			} catch (err) {
 				console.error("Unhandled error:", err);
 				return withCors(json({ error: "Internal server error" }, 500));
@@ -160,7 +144,6 @@ export default {
 		switch (event.cron) {
 			case "*/5 * * * *":
 				await recordSample(env);
-				await triggerWorkflows(env);
 				break;
 			case "*/30 * * * *":
 				await updateArchiveCache(env);

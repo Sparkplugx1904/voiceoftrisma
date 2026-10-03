@@ -309,18 +309,6 @@ describe("router worker gabungan", () => {
 		expect(rateLimited("t:ipB", 1, 1_700_000_000_001)).toBe(false); // ipB tidak terpengaruh ipA
 	});
 
-	it("isBotUA: tool script diblokir, browser & curl lolos", async () => {
-		const { isBotUA } = await import("../src/shared");
-		expect(isBotUA("Python/3.11 aiohttp/3.14.1")).toBe(true); // crawler 66k
-		expect(isBotUA("python-requests/2.31.0")).toBe(true);
-		expect(isBotUA("Go-http-client/1.1")).toBe(true);
-		expect(isBotUA("okhttp/4.9.3")).toBe(true);
-		expect(isBotUA("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36")).toBe(false);
-		expect(isBotUA("Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 Mobile Safari/537.36")).toBe(false);
-		expect(isBotUA("curl/8.10.1")).toBe(false); // admin verifikasi tetap jalan
-		expect(isBotUA(null)).toBe(false);
-	});
-
 	it("RateLimitDO (durable object): request ke-4 dalam jendela ditolak (max=3)", async () => {
 		const ns = (env as any).RATE_LIMITER;
 		if (!ns) {
@@ -342,4 +330,4 @@ describe("router worker gabungan", () => {
 		const other = await ns.get(ns.idFromName("testRateLimitUnit2")).fetch(q(3));
 		expect(((await other.json()) as { ok: boolean }).ok).toBe(true);
 	});
-	});
+});

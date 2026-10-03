@@ -1,13 +1,12 @@
 /**
  * Worker gabungan VOICE OF TRISMA
  * ---------------------------------------------------------
- * Satu worker, enam modul (route prefix dirapikan):
+ * Satu worker, lima modul (route prefix dirapikan):
  *   /api/*    -> admin (login, jadwal, riwayat, log)   [D1 kv_store]
  *   /stats    -> stream-stats (proxy live + ?history=1) [D1 samples]
  *   /archive  -> cache arsip Archive.org                [D1 kv_store]
  *   /metrics  -> snapshot stats icecast (15:00-19:00 WITA) [D1 kv_store]
  *   /workflow -> stub info (kerja lewat cron saja)
- *   /stream   -> passthrough audio icecast + analytics  [D1 record_sessions]
  *
  * Cron (named triggers — event.cron dipakai untuk routing):
  *   stream-stats : setiap 5 menit  poll icecast -> sample D1
@@ -33,10 +32,6 @@
 			{
 				"name": "RATE_LIMITER",
 				"class_name": "RateLimitDO"
-			},
-			{
-				"name": "TUNNEL_HUB",
-				"class_name": "TunnelHubDO"
 			}
 		]
 	},
@@ -48,11 +43,12 @@
 		{
 			"tag": "v2-tunnel-hub",
 			"new_sqlite_classes": ["TunnelHubDO"]
+		},
+		{
+			"tag": "v3-remove-tunnel",
+			"deleted_classes": ["TunnelHubDO"]
 		}
 	],
-	// Smart Placement: pin worker + DO dekat trafik (CGK) → kurangi RTT hop
-	// DO rate-limiter yang tersebar lintas-isolate.
-	"placement": { "mode": "smart" },
 	"observability": {
 		"enabled": true
 	},
