@@ -42,17 +42,21 @@ def get_instance_id() -> str:
 
 # ── RFC 6455 Minimal WebSocket Client (Murni Library Standar Python) ─────────
 
-def _make_ws_frame(text: str) -> bytes:
-    """Buat frame teks WebSocket RFC 6455 dengan masking client."""
-    data = text.encode("utf-8")
+def _make_ws_frame(data_or_text, opcode: int = 0x1) -> bytes:
+    """Buat frame WebSocket RFC 6455 dengan masking client."""
+    if isinstance(data_or_text, str):
+        data = data_or_text.encode("utf-8")
+    else:
+        data = bytes(data_or_text)
     length = len(data)
     mask = os.urandom(4)
+    first_byte = 0x80 | (opcode & 0x0F)
     if length <= 125:
-        header = bytes([0x81, 0x80 | length])
+        header = bytes([first_byte, 0x80 | length])
     elif length <= 65535:
-        header = bytes([0x81, 0x80 | 126]) + length.to_bytes(2, "big")
+        header = bytes([first_byte, 0x80 | 126]) + length.to_bytes(2, "big")
     else:
-        header = bytes([0x81, 0x80 | 127]) + length.to_bytes(8, "big")
+        header = bytes([first_byte, 0x80 | 127]) + length.to_bytes(8, "big")
     masked = bytes(b ^ mask[i % 4] for i, b in enumerate(data))
     return header + mask + masked
 
@@ -151,6 +155,8 @@ class TunnelClient:
 
             if b"101 " in resp or b"Switching Protocols" in resp:
                 self.ws_connected = True
+                # Jalankan pembaca frame di background thread agar PING dibalas PONG
+                threading.Thread(target=self._read_loop, args=(self.sock,), daemon=True).start()
                 return True
             else:
                 self._close_sock()
@@ -158,6 +164,43 @@ class TunnelClient:
         except Exception:
             self._close_sock()
             return False
+
+    def _read_loop(self, sock):
+        """Baca frame masuk dari server: tangani PING -> balas PONG."""
+        while self.is_running and self.ws_connected and self.sock is sock:
+            try:
+                head = sock.recv(2)
+                if not head or len(head) < 2:
+                    break
+                opcode = head[0] & 0x0F
+                has_mask = bool(head[1] & 0x80)
+                length = head[1] & 0x7F
+                if length == 126:
+                    ext = sock.recv(2)
+                    length = int.from_bytes(ext, "big")
+                elif length == 127:
+                    ext = sock.recv(8)
+                    length = int.from_bytes(ext, "big")
+                mask = sock.recv(4) if has_mask else None
+                payload = b""
+                while len(payload) < length:
+                    chunk = sock.recv(min(length - len(payload), 4096))
+                    if not chunk:
+                        break
+                    payload += chunk
+                if mask:
+                    payload = bytes(b ^ mask[i % 4] for i, b in enumerate(payload))
+
+                if opcode == 0x9:  # PING
+                    # Balas PONG segera dengan payload yang sama
+                    pong = _make_ws_frame(payload, opcode=0x0A)
+                    sock.sendall(pong)
+                elif opcode == 0x8:  # CLOSE
+                    break
+            except Exception:
+                break
+        if self.sock is sock:
+            self._close_sock()
 
     def _close_sock(self):
         self.ws_connected = False

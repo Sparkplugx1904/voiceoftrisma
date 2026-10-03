@@ -70,6 +70,9 @@ export const CORS_HEADERS: Record<string, string> = {
 };
 
 export function withCors(response: Response): Response {
+	if (response.status === 101 || (response as any).webSocket) {
+		return response;
+	}
 	const headers = new Headers(response.headers);
 	for (const [k, v] of Object.entries(CORS_HEADERS)) headers.set(k, v);
 	return new Response(response.body, { status: response.status, headers });

@@ -62,11 +62,13 @@ export class TunnelHubDO implements DurableObject {
 			line: logLine,
 			time: Date.now(),
 		});
-		for (const viewer of this.viewers) {
+		for (const viewer of Array.from(this.viewers)) {
 			if (!viewer.targetVm || viewer.targetVm === instanceId) {
 				try {
 					viewer.ws.send(msg);
-				} catch {}
+				} catch {
+					this.viewers.delete(viewer);
+				}
 			}
 		}
 	}

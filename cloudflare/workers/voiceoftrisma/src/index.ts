@@ -140,7 +140,11 @@ export default {
 			if (!route.pattern.exec(normalized)) continue;
 
 			try {
-				return withCors(await route.handler(request, env, ctx));
+				const res = await route.handler(request, env, ctx);
+				if (res.status === 101 || (res as any).webSocket) {
+					return res;
+				}
+				return withCors(res);
 			} catch (err) {
 				console.error("Unhandled error:", err);
 				return withCors(json({ error: "Internal server error" }, 500));
