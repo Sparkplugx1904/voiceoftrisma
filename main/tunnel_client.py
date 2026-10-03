@@ -155,6 +155,7 @@ class TunnelClient:
 
             if b"101 " in resp or b"Switching Protocols" in resp:
                 self.ws_connected = True
+                self.sock.settimeout(20.0)
                 # Jalankan pembaca frame di background thread agar PING dibalas PONG
                 threading.Thread(target=self._read_loop, args=(self.sock,), daemon=True).start()
                 return True
@@ -197,6 +198,8 @@ class TunnelClient:
                     sock.sendall(pong)
                 elif opcode == 0x8:  # CLOSE
                     break
+            except (socket.timeout, TimeoutError):
+                continue
             except Exception:
                 break
         if self.sock is sock:
