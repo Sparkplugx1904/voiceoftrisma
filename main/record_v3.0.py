@@ -75,6 +75,20 @@ except ImportError:
         from sidik_suara import (audio_ke_sidik, cari_kembaran, sidik_ke_detik,
                                  durasi_detik, potong_pangkal_seamless)
 
+try:
+    from tunnel_client import (init_tunnel, push_tunnel_log, set_tunnel_status,
+                               get_instance_id, cek_runner_kembar_via_worker)
+except ImportError:
+    try:
+        from main.tunnel_client import (init_tunnel, push_tunnel_log, set_tunnel_status,
+                                       get_instance_id, cek_runner_kembar_via_worker)
+    except ImportError:
+        def push_tunnel_log(x): pass
+        def set_tunnel_status(x): pass
+        def get_instance_id(): return "vm-local"
+        def init_tunnel(*args, **kwargs): pass
+        def cek_runner_kembar_via_worker(*args, **kwargs): return False
+
 # ---------- waktu ----------
 WITA = datetime.timezone(datetime.timedelta(hours=8))
 PEMILIK_JATUH = "Sparkplugx1904"
@@ -105,7 +119,9 @@ def log(tag_msg):
     if ARGS is not None and getattr(ARGS, "tanpa_log", False):
         return
     cap = datetime.datetime.now(datetime.UTC).astimezone(WITA).strftime("%Y-%m-%d %H:%M:%S")
-    print(f"[{cap}] {tag_msg}", flush=True)
+    baris = f"[{cap}] {tag_msg}"
+    print(baris, flush=True)
+    push_tunnel_log(baris)
 
 
 def kini_wita():
@@ -389,6 +405,7 @@ def tunggu_siaran(url_stats, url_stream, mulai=None, titik_picu=None, max_umur=N
     Kembalikan tuple (status, sudah_picu, status_picu, picu_ulang_pada):
       status: "on-air" | "selesai" (umur habis) | "batal"
     """
+    set_tunnel_status("standby")
     log(f"[TUNGGU] menunggu siaran — cek ke: {url_stats}")
     awal_jam = kini_wita().hour
     putaran = 0
@@ -448,6 +465,7 @@ def tunggu_siaran(url_stats, url_stream, mulai=None, titik_picu=None, max_umur=N
                 bersih = r.text.replace(" ", "")
                 if '"streamstatus":1' in bersih:
                     log("[OK] siaran ON-AIR — mulai merekam detik ini juga!")
+                    set_tunnel_status("recording")
                     return "on-air", sudah_picu, status_picu, picu_ulang_pada
                 log(f"[TUNGGU] #{putaran} OFF-AIR (umur {int(umur)}d/{t_max}d), cek lagi {jeda}d.")
             else:
@@ -950,22 +968,18 @@ def jalan_utama():
     os.makedirs(ARGS.map_rekaman, exist_ok=True)
     os.makedirs(ARGS.map_warisan, exist_ok=True)
 
-    # Anti kembar saat bangun: kalau API bisa dihubungi dan ternyata
-    # sudah ada yang bernomor sama dan lebih tua, mundur agar tidak dobel.
-    if ambil_token():
-        pemilik, repo = repo_tujuan()
-        if penerus_sudah_hidup(pemilik, repo, ambil_token(), ARGS.rantai_id,
-                               int(ARGS.nomor), run_saya=""):
-            log("[KEMBAR] ada lari bernomor sama. Cek run-id...")
-            saya = os.environ.get("GITHUB_RUN_ID", "")
-            if saya:
-                log("[MUNDUR] kembar lebih tua sudah jalan, saya mundur.")
-                return 0
-
-    # ===== TIMER DARI WAKTU BOOT SESUNGGUHNYA (bukan time.time() sekarang) =====
-    # Ambil created_at run ini dari GitHub API — mencakup install deps, checkout, dll.
-    # Hasilnya epoch float. Seluruh logika umur memakai time.time() - mulai_boot.
+    # ===== INISIALISASI TUNNEL WEBSOCKET & LOG HUB =====
+    instance_id = get_instance_id()
     mulai_boot = waktu_boot_sesungguhnya()
+    init_tunnel(CLOUDFLARE_RELAY_URL, instance_id, ARGS.rantai_id, int(ARGS.nomor), boot_epoch=mulai_boot)
+    log(f"[TUNNEL] Terhubung ke Cloudflare WebSocket Hub — Instance ID: {instance_id}")
+
+    # Anti kembar saat bangun via Cloudflare Worker (tanpa GitHub API / tanpa token)
+    if cek_runner_kembar_via_worker(CLOUDFLARE_RELAY_URL, ARGS.rantai_id, int(ARGS.nomor), instance_id):
+        log("[MUNDUR] Runner kembar aktif bernomor sama sudah ada di Cloudflare Worker. Mundur.")
+        set_tunnel_status("cancelled_twin")
+        return 0
+
     elapsed_saat_mulai = time.time() - mulai_boot
     log(f"[BOOT] elapsed sejak boot: {int(elapsed_saat_mulai)}d "
         f"(install+checkout sudah memakan {int(elapsed_saat_mulai)}d dari quota {ARGS.max_umur}d)")
@@ -1226,8 +1240,10 @@ def jalan_utama():
 
     if ARGS.tanpa_unggah:
         log(f"[LEWAT] tanpa unggah. Part di {part_final}, master di {master_final}. Pemicu={status_picu}")
+        set_tunnel_status("done")
         return 0
 
+    set_tunnel_status("uploading")
     url, iid = unggah_ke_archive(ARGS.rantai_id, ARGS.nomor, part_final,
                                  master_berkas=master_final,
                                  sesi=ARGS.sesi,
@@ -1237,6 +1253,7 @@ def jalan_utama():
     if url and "GITHUB_ENV" in os.environ:
         with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as f:
             f.write(f"ARCHIVE_URL={url}\nITEM_ID={iid}\n")
+    set_tunnel_status("done" if url else "error_upload")
     return 0 if url else 1
 
 

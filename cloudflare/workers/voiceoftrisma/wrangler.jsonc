@@ -33,6 +33,10 @@
 			{
 				"name": "RATE_LIMITER",
 				"class_name": "RateLimitDO"
+			},
+			{
+				"name": "TUNNEL_HUB",
+				"class_name": "TunnelHubDO"
 			}
 		]
 	},
@@ -40,6 +44,10 @@
 		{
 			"tag": "v1-ratelimit-do",
 			"new_sqlite_classes": ["RateLimitDO"]
+		},
+		{
+			"tag": "v2-tunnel-hub",
+			"new_sqlite_classes": ["TunnelHubDO"]
 		}
 	],
 	// Smart Placement: pin worker + DO dekat trafik (CGK) → kurangi RTT hop

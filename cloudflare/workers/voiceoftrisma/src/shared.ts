@@ -26,6 +26,8 @@ export interface Env {
 	// Durable Object rate limiter (shared lintas-isolate). Opsional supaya
 	// env test / dev tanpa binding tidak crash (fail-open).
 	RATE_LIMITER?: DurableObjectNamespace;
+	// Durable Object WebSocket relay & log hub untuk runner VM
+	TUNNEL_HUB?: DurableObjectNamespace;
 }
 
 export interface Route {
