@@ -41,6 +41,8 @@ import time
 
 try:
     import requests
+    import urllib3
+    urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 except ImportError:
     print("[ERROR] butuh pustaka 'requests'. Pasang: pip install requests", flush=True)
     sys.exit(2)
@@ -146,11 +148,24 @@ def buat_tanda_hmac(rahasia: str, data: str) -> str:
 # ---------- Waktu boot sesungguhnya ----------
 
 def waktu_boot_sesungguhnya() -> float:
-    """Ambil epoch seconds saat runner pertama kali dibuat via GitHub API.
+    """Ambil epoch seconds saat runner pertama kali dibuat.
 
-    Lebih akurat daripada time.time() karena mencakup waktu install deps.
-    Gagal → kembalikan time.time() sebagai fallback (cukup dekat).
+    Prioritas:
+    1. Env VM_BOOT_EPOCH (dicatat pada detik pertama langkah workflow GHA, 100% akurat & instan)
+    2. GitHub API GET /runs/{run_id} -> created_at
+    3. time.time() sebagai fallback
     """
+    # 1. Cek VM_BOOT_EPOCH dari workflow step
+    epoch_env = os.environ.get("VM_BOOT_EPOCH", "").strip()
+    if epoch_env:
+        try:
+            epoch = float(epoch_env)
+            log(f"[BOOT] waktu boot dari VM_BOOT_EPOCH: {int(epoch)} ({int(time.time() - epoch)}d lalu, akurat tanpa API)")
+            return epoch
+        except ValueError:
+            pass
+
+    # 2. Cek GitHub API
     token = ambil_token()
     run_id = os.environ.get("GITHUB_RUN_ID", "")
     if not token or not run_id:
@@ -171,7 +186,7 @@ def waktu_boot_sesungguhnya() -> float:
             dt = datetime.datetime.strptime(created_at, "%Y-%m-%dT%H:%M:%SZ")
             dt = dt.replace(tzinfo=datetime.timezone.utc)
             epoch = dt.timestamp()
-            log(f"[BOOT] waktu boot sesungguhnya: {created_at} ({int(time.time() - epoch)}d lalu)")
+            log(f"[BOOT] waktu boot dari GitHub API: {created_at} ({int(time.time() - epoch)}d lalu)")
             return epoch
         log(f"[BOOT] GitHub API HTTP {r.status_code}, fallback ke waktu sekarang.")
     except Exception as e:

@@ -59,12 +59,19 @@ on:
 
 run-name: "estafet ${{ inputs.rantai_id }} #${{ inputs.nomor }}"
 
+permissions:
+  actions: read
+  contents: read
+
 jobs:
   estafet:
     name: "🎙️ Estafet #${{ inputs.nomor }}"
     runs-on: ubuntu-latest
     timeout-minutes: 340 # 5 jam 40 mnt < batas 6 jam, kasih jeda
     steps:
+      - name: Catat Waktu Boot VM
+        run: echo "VM_BOOT_EPOCH=$(date +%s)" >> "$GITHUB_ENV"
+
       - uses: actions/checkout@v4
 
       - name: Hentikan bila perintah=berhenti
@@ -91,8 +98,9 @@ jobs:
           MY_ACCESS_KEY: ${{ secrets.MY_ACCESS_KEY }}
           MY_SECRET_KEY: ${{ secrets.MY_SECRET_KEY }}
           STREAM_URL: ${{ secrets.STREAM_URL }}
-          GH_TOKEN: ${{ secrets.GH_TOKEN }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GH_TOKEN || github.token }}
+          GITHUB_TOKEN: ${{ github.token }}
+          VM_BOOT_EPOCH: ${{ env.VM_BOOT_EPOCH }}
           # Kunci relay antar VM (harus sama dengan RELAY_SECRET di Cloudflare Worker)
           GH_RELAY_SECRET: ${{ secrets.GH_RELAY_SECRET }}
           CLOUDFLARE_RELAY_URL: https://voiceoftrisma.anandapradnyana68.workers.dev
