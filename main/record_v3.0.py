@@ -496,21 +496,41 @@ def sha256_berkas(lintas):
     return h.hexdigest()
 
 
-def rekam_satu_bagian(url, keluar, detik):
-    """Rekam satu potongan sepanjang `detik` via ffmpeg. Kembalikan True ok.
+def _hentikan_ffmpeg(proc):
+    """Hentikan proses ffmpeg secara anggun agar buffer tersimpan rapi."""
+    try:
+        if sys.platform != "win32":
+            proc.send_signal(signal.SIGINT)
+        else:
+            proc.terminate()
+        proc.wait(timeout=5)
+    except Exception:
+        try:
+            proc.kill()
+        except Exception:
+            pass
 
-    Skenario tak terduga yang ditangani: ffmpeg crash, URL mati, disk
-    sempit (dicek sebelum jalan), proses digantung (timeout + bunuh).
+
+def rekam_satu_bagian(url, keluar, detik, stats_url=""):
+    """Rekam satu potongan sepanjang `detik` via ffmpeg secara responsif.
+
+    Memantau status siaran setiap 3 detik. Jika pemancar resmi OFF-AIR atau
+    ada sinyal berhenti, ffmpeg segera dihentikan secara anggun agar audio
+    yang sudah terekam tetap tersimpan utuh tanpa harus menunggu 10 menit.
+
+    Kembalikan tuple (ok: bool, off_air_terdeteksi: bool).
     """
     if not ruang_cukup(os.path.dirname(keluar) or "."):
         log("[ERROR] ruang disk sempit (<100MB). Batal merekam bagian ini.")
-        return False
+        return False, False
     ff = cari_ffmpeg()
+    # Tanpa -reconnect_at_eof agar bila server menutup koneksi, ffmpeg tidak looping
     cmd = [
         ff, "-y", "-hide_banner", "-v", "error",
-        "-reconnect", "1", "-reconnect_at_eof", "1",
-        "-reconnect_streamed", "1", "-reconnect_delay_max", "5",
-        "-timeout", "10000000",
+        "-reconnect", "1",
+        "-reconnect_streamed", "1",
+        "-reconnect_delay_max", "5",
+        "-timeout", "5000000",
         "-i", url,
         "-t", str(int(detik)),
         "-c", "copy",
@@ -518,28 +538,50 @@ def rekam_satu_bagian(url, keluar, detik):
         keluar,
     ]
     try:
-        hasil = subprocess.run(cmd, timeout=int(detik) + 90,
-                               stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    except subprocess.TimeoutExpired:
-        log(f"[ERROR] ffmpeg gantung >{detik}s+90s, bagian dibuang: {keluar}")
-        return False
-    min_byte = max(1024, int(detik * 2000))
-    if hasil.returncode != 0:
-        log(f"[WARN] ffmpeg kode {hasil.returncode}: {hasil.stderr[:200]!r}")
-        try:
-            if (not os.path.exists(keluar)) or os.path.getsize(keluar) < min_byte:
-                return False
-        except OSError:
-            return False
-        log("[WARN] berkas kecil tapi ada — diterima dengan catatan.")
-        return True
-    try:
-        if os.path.getsize(keluar) < min_byte:
-            log(f"[WARN] hasil rekaman <{min_byte} byte ({os.path.getsize(keluar)} byte), dianggap gagal.")
-            return False
-    except OSError:
-        return False
-    return True
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    except Exception as e:
+        log(f"[ERROR] gagal menjalankan ffmpeg: {e}")
+        return False, False
+
+    mulai = time.time()
+    off_air_terdeteksi = False
+
+    while proc.poll() is None:
+        time.sleep(3)
+        # 1. Cek apakah ada sinyal henti manual
+        if ARGS and sudah_diminta_berhenti(getattr(ARGS, "map_rekaman", "recordings"),
+                                           getattr(ARGS, "perintah", "jalan")):
+            log("[BERHENTI] sinyal henti diterima saat merekam. Menghentikan ffmpeg...")
+            _hentikan_ffmpeg(proc)
+            break
+
+        # 2. Cek apakah pemancar sudah resmi OFF-AIR di server stats
+        if stats_url and (time.time() - mulai >= 6):
+            try:
+                r = requests.get(stats_url, timeout=3,
+                                 headers={"User-Agent": "voiceoftrisma-estafet/3.0"},
+                                 verify=False)
+                if r.status_code == 200 and '"streamstatus":0' in r.text.replace(" ", ""):
+                    log("[OFF-AIR] Server siaran resmi OFF-AIR di tengah perekaman. Menutup bagian ini secara rapi...")
+                    off_air_terdeteksi = True
+                    _hentikan_ffmpeg(proc)
+                    break
+            except Exception:
+                pass
+
+        # 3. Batas waktu maksimum (detik + 60s)
+        if time.time() - mulai > int(detik) + 60:
+            log(f"[WARN] ffmpeg melebihi batas waktu {detik}s + 60s. Menghentikan.")
+            _hentikan_ffmpeg(proc)
+            break
+
+    ada = os.path.exists(keluar)
+    ukuran = os.path.getsize(keluar) if ada else 0
+    # Berkas valid jika ada data audio (min 16KB bila OFF-AIR di tengah jalan)
+    min_byte = 16384 if off_air_terdeteksi else max(1024, int(min(detik, 10) * 2000))
+    if ada and ukuran >= min_byte:
+        return True, off_air_terdeteksi
+    return False, off_air_terdeteksi
 
 
 def tulis_ekor(bagian_terakhir, map_rekaman, rantai_id, nomor, tumpang_detik):
@@ -1056,14 +1098,21 @@ def jalan_utama():
         panjang = ARGS.bagian if sisa is None else min(ARGS.bagian, sisa)
         berkas = os.path.join(ARGS.map_rekaman, f"{dasar}_{idx:03d}.mp3")
         log(f"[REKAM] bagian {idx} ({panjang}d) -> {berkas}")
-        ok = rekam_satu_bagian(ARGS.stream_url, berkas, panjang)
+        ok, off_air_di_tengah = rekam_satu_bagian(ARGS.stream_url, berkas, panjang, stats_url=ARGS.stats_url)
+        if off_air_di_tengah:
+            off_air_selesai = True
         if not ok:
+            if off_air_di_tengah:
+                log("[OFF-AIR] Pemancar resmi OFF-AIR sebelum/saat bagian ini. Menutup sesi rekaman.")
+                break
             # Retry dengan jeda bertahap: 5 → 15 → 30 → 60 → 90 detik
             for jeda_coba, tunggu in enumerate([5, 15, 30, 60, 90], 1):
                 log(f"[WARN] bagian gagal (coba {jeda_coba}), tunggu {tunggu}d lalu ulangi.")
                 time.sleep(tunggu)
-                ok = rekam_satu_bagian(ARGS.stream_url, berkas, panjang)
-                if ok:
+                ok, off_air_di_tengah = rekam_satu_bagian(ARGS.stream_url, berkas, panjang, stats_url=ARGS.stats_url)
+                if off_air_di_tengah:
+                    off_air_selesai = True
+                if ok or off_air_di_tengah:
                     break
             if not ok:
                 # Cek apakah pemancar resmi OFF-AIR (siaran sesi ini telah selesai)
@@ -1074,7 +1123,7 @@ def jalan_utama():
                         off_air = True
                 except Exception:
                     pass
-                if off_air:
+                if off_air or off_air_selesai:
                     log("[OFF-AIR] Pemancar resmi OFF-AIR (siaran sesi ini selesai). Menutup sesi rekaman.")
                     off_air_selesai = True
                     break
@@ -1091,6 +1140,10 @@ def jalan_utama():
         bagian_daftar.append(berkas)
         manifest.append(info)
         sudah_rekam += panjang
+
+        if off_air_di_tengah:
+            log("[OFF-AIR] Bagian rekaman terakhir tersimpan rapi. Menutup sesi tayang siaran.")
+            break
 
         # ═══ SINYAL "SIAP" UNTUK RUNNER SEBELUMNYA (Runner B) ═══
         # B mengirimkan sinyal ke Cloudflare begitu chunk pertama selesai.
