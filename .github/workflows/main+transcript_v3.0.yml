@@ -1,4 +1,4 @@
-name: Estafet v3.0 (pekerja ke pekerja)
+name: Record and Transcribe v3.0
 
 # Rantai estafet: A memicu B lewat Cloudflare Worker (relay aman HMAC).
 # Cloudflare Worker yang kemudian dispatch GitHub Actions Runner B.
