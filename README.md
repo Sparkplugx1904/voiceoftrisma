@@ -43,7 +43,9 @@
   <a href="https://github.com/Sparkplugx1904/voiceoftrisma/blob/main/ABOUT%20MADYAPADMA.md" target="_blank">
     <img src="https://img.shields.io/badge/About%20Madyapadma-lightgray?style=for-the-badge" alt="About Madyapadma"/>
   </a>
+</p>
 
+<p align="center">
   <!-- Badge untuk SoundCloud user-293864053 -->
   <a href="https://soundcloud.com/user-293864053" target="_blank">
     <img src="https://img.shields.io/badge/Voice%20of%20Trisma-orange?style=for-the-badge&logo=soundcloud&logoColor=white&color=FF5500" alt="SoundCloud User"/>
@@ -63,7 +65,6 @@
   <a href="https://soundcloud.com/madyapadma" target="_blank">
     <img src="https://img.shields.io/badge/Madyapadma-orange?style=for-the-badge&logo=soundcloud&logoColor=white&color=FF5500" alt="SoundCloud Madyapadma"/>
   </a>
-
 </p>
 
 
