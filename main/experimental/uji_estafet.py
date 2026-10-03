@@ -25,12 +25,12 @@ import tempfile
 import time
 import wave
 
-AKAR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if AKAR not in sys.path:
-    sys.path.insert(0, AKAR)
-MAIN = os.path.join(AKAR, "main")
-if MAIN not in sys.path:
-    sys.path.insert(0, MAIN)
+EKSPERIMENTAL = os.path.dirname(os.path.abspath(__file__))
+MAIN = os.path.dirname(EKSPERIMENTAL)
+AKAR = os.path.dirname(MAIN)
+for p in (AKAR, MAIN, EKSPERIMENTAL):
+    if p not in sys.path:
+        sys.path.insert(0, p)
 
 GAGAL = []
 
@@ -201,7 +201,7 @@ def uji_3_rekam_pura(tmp):
     os.makedirs(rec, exist_ok=True)
     port = port_bebas()
     srv = subprocess.Popen(
-        [sys.executable, os.path.join(MAIN, "siaran_pura.py"),
+        [sys.executable, os.path.join(EKSPERIMENTAL, "siaran_pura.py"),
          "--port", str(port), "--tunda", "1", "--lama", "300"],
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
     try:
@@ -367,7 +367,7 @@ def uji_6_serah_terima(tmp):
     os.makedirs(w_dir, exist_ok=True)
     port = port_bebas()
     srv = subprocess.Popen(
-        [sys.executable, os.path.join(MAIN, "siaran_pura.py"),
+        [sys.executable, os.path.join(EKSPERIMENTAL, "siaran_pura.py"),
          "--port", str(port), "--tunda", "1", "--lama", "600"],
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
     try:

@@ -237,7 +237,8 @@ def picu_penerus_via_worker(rantai_id, nomor_saya, tumpang, margin, sesi, induk_
         "induk_run_id": str(run_id),
     }
     badan_json = json.dumps(badan, separators=(",", ":"), sort_keys=True)
-    tanda = buat_tanda_hmac(rahasia, badan_json)
+    ts = str(int(time.time()))
+    tanda = buat_tanda_hmac(rahasia, f"{ts}:{badan_json}")
 
     url = f"{CLOUDFLARE_RELAY_URL}/relay/trigger"
     for coba in range(1, 4):
@@ -247,6 +248,7 @@ def picu_penerus_via_worker(rantai_id, nomor_saya, tumpang, margin, sesi, induk_
                 data=badan_json,
                 headers={"Content-Type": "application/json",
                          "X-Relay-Sig": tanda,
+                         "X-Relay-Timestamp": ts,
                          "User-Agent": "voiceoftrisma-estafet/3.0"},
                 timeout=20,
             )
@@ -278,7 +280,8 @@ def sinyal_siap_ke_worker(rantai_id, nomor):
     run_id = os.environ.get("GITHUB_RUN_ID", "")
     badan = {"rantai_id": str(rantai_id), "nomor": int(nomor), "run_id": run_id}
     badan_json = json.dumps(badan, separators=(",", ":"), sort_keys=True)
-    tanda = buat_tanda_hmac(rahasia, badan_json)
+    ts = str(int(time.time()))
+    tanda = buat_tanda_hmac(rahasia, f"{ts}:{badan_json}")
 
     url = f"{CLOUDFLARE_RELAY_URL}/relay/ready"
     for coba in range(1, 4):
@@ -288,6 +291,7 @@ def sinyal_siap_ke_worker(rantai_id, nomor):
                 data=badan_json,
                 headers={"Content-Type": "application/json",
                          "X-Relay-Sig": tanda,
+                         "X-Relay-Timestamp": ts,
                          "User-Agent": "voiceoftrisma-estafet/3.0"},
                 timeout=15,
             )
@@ -316,7 +320,8 @@ def tunggu_penerus_siap(rantai_id, nomor_b, batas_tunggu=900):
         return True  # fail-open: jangan blokir A selamanya
 
     data_sign = f"rantai_id={rantai_id}&nomor={nomor_b}"
-    tanda = buat_tanda_hmac(rahasia, data_sign)
+    ts = str(int(time.time()))
+    tanda = buat_tanda_hmac(rahasia, f"{ts}:{data_sign}")
     url = (f"{CLOUDFLARE_RELAY_URL}/relay/status"
            f"?rantai_id={rantai_id}&nomor={nomor_b}")
 
@@ -328,6 +333,7 @@ def tunggu_penerus_siap(rantai_id, nomor_b, batas_tunggu=900):
             r = requests.get(
                 url,
                 headers={"X-Relay-Sig": tanda,
+                         "X-Relay-Timestamp": ts,
                          "User-Agent": "voiceoftrisma-estafet/3.0"},
                 timeout=10,
             )

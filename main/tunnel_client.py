@@ -84,14 +84,28 @@ class TunnelClient:
         self.port = p.port or (443 if p.scheme == "https" else 80)
         self.is_ssl = p.scheme in ("https", "wss")
 
+        # Otentikasi Runner via RELAY_SECRET (Anti-Spoofing & Anti-Replay)
+        rahasia = (os.environ.get("GH_RELAY_SECRET") or os.environ.get("RELAY_SECRET") or "").strip()
+        ts = str(int(time.time()))
+        sig = ""
+        if rahasia:
+            import hmac as _hmac
+            import hashlib
+            # Sign ts:instance_id
+            sig = "sha256=" + _hmac.new(rahasia.encode("utf-8"), f"{ts}:{self.instance_id}".encode("utf-8"), hashlib.sha256).hexdigest()
+
         # Query param WebSocket
-        query = urllib.parse.urlencode({
+        params = {
             "role": "runner",
             "instance_id": self.instance_id,
             "rantai_id": str(self.rantai_id),
             "nomor": str(self.nomor),
             "boot_epoch": str(int(self.boot_epoch)),
-        })
+        }
+        if sig:
+            params["ts"] = ts
+            params["sig"] = sig
+        query = urllib.parse.urlencode(params)
         self.ws_path = f"/tunnel/ws?{query}"
 
         # Mulai worker thread background
@@ -280,8 +294,18 @@ class TunnelClient:
             "status": self.status,
             "logs": batch,
         }
+        body_str = json.dumps(payload, separators=(",", ":"), sort_keys=True)
+        headers = {"User-Agent": "voiceoftrisma-tunnel/3.0", "Content-Type": "application/json"}
+        rahasia = (os.environ.get("GH_RELAY_SECRET") or os.environ.get("RELAY_SECRET") or "").strip()
+        if rahasia:
+            import hmac as _hmac
+            import hashlib
+            ts = str(int(time.time()))
+            sig = "sha256=" + _hmac.new(rahasia.encode("utf-8"), f"{ts}:{body_str}".encode("utf-8"), hashlib.sha256).hexdigest()
+            headers["X-Relay-Timestamp"] = ts
+            headers["X-Relay-Sig"] = sig
         try:
-            requests.post(url, json=payload, headers={"User-Agent": "voiceoftrisma-tunnel/3.0"}, timeout=5)
+            requests.post(url, data=body_str, headers=headers, timeout=5)
         except Exception:
             # Kembalikan ke antrean jika gagal
             for item in reversed(batch):

@@ -13,7 +13,7 @@
          5. Meminta restart runner: POST /tunnel/restart
    ========================================================= */
 
-import { Env, Route, json } from "./shared";
+import { Env, Route, json, verifyControlAuth } from "./shared";
 
 const GITHUB_OWNER = "Sparkplugx1904";
 const GITHUB_REPO = "voiceoftrisma";
@@ -301,6 +301,30 @@ async function forwardToTunnelHub(request: Request, env: Env): Promise<Response>
 	if (!env.TUNNEL_HUB) {
 		return json({ error: "TUNNEL_HUB binding tidak tersedia." }, 503);
 	}
+
+	const url = new URL(request.url);
+
+	// 1. Verifikasi koneksi WebSocket Runner (/tunnel/ws?role=runner)
+	if (url.pathname === "/tunnel/ws" && url.searchParams.get("role") === "runner") {
+		const instanceId = url.searchParams.get("instance_id") || "";
+		const auth = await verifyControlAuth(request, env, instanceId);
+		if (!auth.authorized) {
+			console.warn(`[SECURITY] Koneksi runner WS palsu ditolak (${auth.error}) untuk instance: ${instanceId}`);
+			return json({ ok: false, error: "UNAUTHORIZED_RUNNER", detail: auth.error }, 401);
+		}
+	}
+
+	// 2. Verifikasi HTTP Push Logs (/tunnel/push)
+	if (url.pathname === "/tunnel/push" && request.method === "POST") {
+		const cloned = request.clone();
+		const bodyText = await cloned.text().catch(() => "");
+		const auth = await verifyControlAuth(request, env, bodyText);
+		if (!auth.authorized) {
+			console.warn(`[SECURITY] HTTP push log ditolak: ${auth.error}`);
+			return json({ ok: false, error: "UNAUTHORIZED_PUSH", detail: auth.error }, 401);
+		}
+	}
+
 	const id = env.TUNNEL_HUB.idFromName("GlobalTunnel");
 	const doStub = env.TUNNEL_HUB.get(id);
 	return doStub.fetch(request);
@@ -308,6 +332,13 @@ async function forwardToTunnelHub(request: Request, env: Env): Promise<Response>
 
 /* Endpoint POST /tunnel/restart — membatalkan runner lama dan dispatch runner baru */
 async function handleTunnelRestart(request: Request, env: Env): Promise<Response> {
+	// Wajib terotentikasi: Hanya Admin atau pihak berwenang dengan RELAY_SECRET / SESSION_SECRET
+	const auth = await verifyControlAuth(request, env);
+	if (!auth.authorized) {
+		console.warn(`[SECURITY] Percobaan restart runner ditolak: ${auth.error}`);
+		return json({ ok: false, error: "UNAUTHORIZED_RESTART", detail: auth.error }, 401);
+	}
+
 	const token: string | undefined = env.GITHUB_TOKEN;
 	if (!token) {
 		return json({ ok: false, error: "GITHUB_TOKEN_MISSING" }, 500);

@@ -14,7 +14,7 @@
    - Verifikasi konstan-waktu (constant-time) via Web Crypto API
    ========================================================= */
 
-import { Env, Route, json } from "./shared";
+import { Env, Route, json, verifyControlAuth } from "./shared";
 
 const GITHUB_OWNER = "Sparkplugx1904";
 const GITHUB_REPO  = "voiceoftrisma";
@@ -79,10 +79,10 @@ async function handleRelayTrigger(request: Request, env: Env): Promise<Response>
 		return json({ ok: false, error: "INVALID_BODY" }, 400);
 	}
 
-	const sig = request.headers.get("X-Relay-Sig") || "";
-	if (!(await verifyRelaySig(env.RELAY_SECRET, bodyText, sig))) {
-		console.warn("[RELAY] /trigger — tanda tangan tidak valid, tolak.");
-		return json({ ok: false, error: "UNAUTHORIZED" }, 401);
+	const auth = await verifyControlAuth(request, env, bodyText);
+	if (!auth.authorized) {
+		console.warn(`[RELAY] /trigger ditolak: ${auth.error}`);
+		return json({ ok: false, error: "UNAUTHORIZED", detail: auth.error }, 401);
 	}
 
 	let body: Record<string, unknown>;
@@ -95,6 +95,11 @@ async function handleRelayTrigger(request: Request, env: Env): Promise<Response>
 	const { rantai_id, nomor_b, tumpang, margin, sesi, induk_run_id } = body as Record<string, unknown>;
 	if (!rantai_id || !nomor_b) {
 		return json({ ok: false, error: "MISSING_FIELDS" }, 400);
+	}
+
+	const SAFE_ID_RE = /^[a-zA-Z0-9_\-\.]{1,64}$/;
+	if (!SAFE_ID_RE.test(String(rantai_id))) {
+		return json({ ok: false, error: "INVALID_RANTAI_ID" }, 400);
 	}
 
 	const token: string | undefined = env.GITHUB_TOKEN;
@@ -169,10 +174,10 @@ async function handleRelayReady(request: Request, env: Env): Promise<Response> {
 		return json({ ok: false, error: "INVALID_BODY" }, 400);
 	}
 
-	const sig = request.headers.get("X-Relay-Sig") || "";
-	if (!(await verifyRelaySig(env.RELAY_SECRET, bodyText, sig))) {
-		console.warn("[RELAY] /ready — tanda tangan tidak valid, tolak.");
-		return json({ ok: false, error: "UNAUTHORIZED" }, 401);
+	const auth = await verifyControlAuth(request, env, bodyText);
+	if (!auth.authorized) {
+		console.warn(`[RELAY] /ready ditolak: ${auth.error}`);
+		return json({ ok: false, error: "UNAUTHORIZED", detail: auth.error }, 401);
 	}
 
 	let body: Record<string, unknown>;
@@ -185,6 +190,11 @@ async function handleRelayReady(request: Request, env: Env): Promise<Response> {
 	const { rantai_id, nomor, run_id } = body as Record<string, unknown>;
 	if (!rantai_id || !nomor) {
 		return json({ ok: false, error: "MISSING_FIELDS" }, 400);
+	}
+
+	const SAFE_ID_RE = /^[a-zA-Z0-9_\-\.]{1,64}$/;
+	if (!SAFE_ID_RE.test(String(rantai_id))) {
+		return json({ ok: false, error: "INVALID_RANTAI_ID" }, 400);
 	}
 
 	const siapPada = Date.now();
@@ -219,14 +229,19 @@ async function handleRelayStatus(request: Request, env: Env): Promise<Response> 
 	// Data yang di-HMAC: canonical query string
 	const data = `rantai_id=${rantai_id}&nomor=${nomor}`;
 
-	const sig = request.headers.get("X-Relay-Sig") || "";
-	if (!(await verifyRelaySig(env.RELAY_SECRET, data, sig))) {
-		console.warn("[RELAY] /status — tanda tangan tidak valid, tolak.");
-		return json({ ok: false, error: "UNAUTHORIZED" }, 401);
+	const auth = await verifyControlAuth(request, env, data);
+	if (!auth.authorized) {
+		console.warn(`[RELAY] /status ditolak: ${auth.error}`);
+		return json({ ok: false, error: "UNAUTHORIZED", detail: auth.error }, 401);
 	}
 
 	if (!rantai_id || !nomor) {
 		return json({ ok: false, error: "MISSING_PARAMS" }, 400);
+	}
+
+	const SAFE_ID_RE = /^[a-zA-Z0-9_\-\.]{1,64}$/;
+	if (!SAFE_ID_RE.test(String(rantai_id))) {
+		return json({ ok: false, error: "INVALID_RANTAI_ID" }, 400);
 	}
 
 	try {

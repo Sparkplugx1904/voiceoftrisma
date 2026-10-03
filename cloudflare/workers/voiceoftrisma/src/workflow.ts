@@ -9,7 +9,7 @@
    4. Trigger workflow main+transcript_v3.0.yml dengan input lengkap.
    ========================================================= */
 
-import { Env, Route, json, d1GetJson, d1SetJson } from "./shared";
+import { Env, Route, json, d1GetJson, d1SetJson, verifyControlAuth } from "./shared";
 
 const GITHUB_OWNER = "Sparkplugx1904";
 const GITHUB_REPO = "voiceoftrisma";
@@ -97,41 +97,9 @@ async function dispatchV3(
 
 /* Eksekusi pemicu orkestrator (dipanggil oleh cron atau endpoint manual) */
 export async function triggerWorkflows(env: Env, paksa = false): Promise<{ triggered: boolean; alasan: string; sesi?: number }> {
-	const token: string | undefined = env.GITHUB_TOKEN;
-	if (!token) {
-		console.error("[WORKFLOW] GITHUB_TOKEN secret missing di Cloudflare Worker");
-		return { triggered: false, alasan: "GITHUB_TOKEN_MISSING" };
-	}
-
-	const rantaiId = getWitaDateString();
-
-	// 1. Cek Anti-Kembar: Jangan picu jika sudah ada runner v3 yang aktif atau mengantre
-	if (!paksa) {
-		const adaRunner = await hasActiveRunner(token);
-		if (adaRunner) {
-			console.log("[ANTI-KEMBAR] Runner v3 sedang aktif berjalan/mengantre. Trigger dibatalkan.");
-			return { triggered: false, alasan: "RUNNER_ALREADY_ACTIVE" };
-		}
-	}
-
-	// 2. Watchdog 24 Jam: Jika TIDAK ADA runner aktif, SELALU hidupkan runner baru!
-	// Runner harus selalu standby di GitHub Actions agar saat siaran mulai,
-	// detik pertama audio langsung terekam tanpa menunggu antrean boot VM 2-5 menit.
-
-	// 3. Estafet V3: Tepat 1 identifier kanonik per tanggal (selalu sesi 1)
-	const sesi = 1;
-
-	// 4. Dispatch runner #1 untuk standby / rekam 24 jam
-	console.log(`[WATCHDOG 24H] Memulai Runner v3 standby: rantai=${rantaiId} nomor=1 sesi=${sesi}`);
-	const hasil = await dispatchV3(token, rantaiId, sesi);
-
-	if (hasil.ok) {
-		console.log(`[ OK ] ${WORKFLOW_V3} berhasil dipicu (${hasil.status}) untuk Sesi ${sesi}`);
-		return { triggered: true, alasan: "SUCCESS", sesi };
-	} else {
-		console.error(`[FAIL] Gagal memicu ${WORKFLOW_V3} → HTTP ${hasil.status}`);
-		return { triggered: false, alasan: `DISPATCH_FAILED_HTTP_${hasil.status}` };
-	}
+	// Workflow V3 dinonaktifkan sementara atas permintaan pengguna
+	console.log("[WORKFLOW] Workflow V3 sedang dinonaktifkan (DISABLED).");
+	return { triggered: false, alasan: "WORKFLOW_V3_DISABLED" };
 }
 
 /* GET /workflow — info status orkestrator atau trigger manual (?trigger=1) */
@@ -140,6 +108,10 @@ async function handleWorkflowInfo(request: Request, env: Env): Promise<Response>
 	const rantaiId = getWitaDateString();
 
 	if (url.searchParams.get("trigger") === "1") {
+		const auth = await verifyControlAuth(request, env);
+		if (!auth.authorized) {
+			return json({ ok: false, error: "UNAUTHORIZED_TRIGGER", detail: auth.error }, 401);
+		}
 		const paksa = url.searchParams.get("paksa") === "1";
 		const hasil = await triggerWorkflows(env, paksa);
 		return json({
