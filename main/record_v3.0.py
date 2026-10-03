@@ -807,21 +807,39 @@ def picu_penerus(rantai_id, nomor_saya, tumpang_detik, induk_info="",
 
 
 # ---------- unggah & master harian ----------
+def format_item_identifier(rantai_id):
+    """Identifier kanonik V3 di Archive.org: TEPAT 1 identifier per tanggal (YYYYMMDD).
+
+    Tidak boleh ada suffix sesi (_1, _2), nomor runner, maupun timestamp,
+    agar seluruh segmen dalam satu hari kalender bergabung ke dalam
+    satu item arsip harian yang sama tanpa duplikasi.
+    """
+    bersih = str(rantai_id).replace("-", "").strip()
+    return f"vot-denpasar-{bersih}"
+
+
 def unduh_master_harian(ident, nama_file, tujuan):
     """Coba unduh master harian dari archive.org untuk disambung."""
-    url = f"https://archive.org/download/{ident}/{nama_file}"
-    try:
-        r = requests.get(url, timeout=120, stream=True)
-        if r.status_code == 200:
-            with open(tujuan, "wb") as f:
-                for chunk in r.iter_content(chunk_size=1024 * 1024):
-                    if chunk:
-                        f.write(chunk)
-            log(f"[MASTER] Berhasil unduh master sebelumnya ({os.path.getsize(tujuan)} byte).")
-            return True
-        log(f"[MASTER] Master belum ada di archive.org (HTTP {r.status_code}).")
-    except Exception as e:
-        log(f"[WARN] gagal unduh master harian ({type(e).__name__}): {e}")
+    # Daftar fallback jika sebelumnya ada item/file bertanda sesi _1
+    calon_urls = [
+        f"https://archive.org/download/{ident}/{nama_file}",
+        f"https://archive.org/download/{ident}_1/{nama_file.replace('.mp3', '_1.mp3')}",
+        f"https://archive.org/download/{ident}_1/{nama_file}",
+        f"https://archive.org/download/{ident}/{nama_file.replace('.mp3', '_1.mp3')}",
+    ]
+    for url in calon_urls:
+        try:
+            r = requests.get(url, timeout=120, stream=True)
+            if r.status_code == 200:
+                with open(tujuan, "wb") as f:
+                    for chunk in r.iter_content(chunk_size=1024 * 1024):
+                        if chunk:
+                            f.write(chunk)
+                log(f"[MASTER] Berhasil unduh master sebelumnya ({os.path.getsize(tujuan)} byte) dari: {url}")
+                return True
+        except Exception as e:
+            log(f"[WARN] gagal unduh master harian dari {url} ({type(e).__name__}): {e}")
+    log(f"[MASTER] Master belum ada di archive.org (akan dibuat baru di item {ident}).")
     return False
 
 
@@ -829,8 +847,8 @@ def unggah_ke_archive(rantai_id, nomor, part_berkas, master_berkas=None,
                       sesi=1, map_rekaman="recordings", kunci=None, rahasia=None, coba=4):
     """Unggah part ke raw/ dan master harian ke root di archive.org.
 
-    Struktur di Archive.org:
-      - VOT-Denpasar_DD-MM-YYYY_{sesi}.mp3 (di root luar folder raw, langsung diputar web player)
+    Struktur di Archive.org (Tepat 1 Identifier per Hari):
+      - VOT-Denpasar_DD-MM-YYYY.mp3 (di root luar folder raw, langsung diputar web player)
       - raw/VOT-Denpasar_..._partX.mp3 (semua part mentah di dalam folder raw/)
       - raw/manifest_nX.json (metadata teknis)
       - raw/ekor_*.json (sidik suara estafet)
@@ -840,7 +858,7 @@ def unggah_ke_archive(rantai_id, nomor, part_berkas, master_berkas=None,
     except ImportError:
         log("[ERROR] pustaka internetarchive belum dipasang.")
         return None, None
-    ident = f"vot-denpasar-{str(rantai_id).replace('-', '')}_{sesi}"
+    ident = format_item_identifier(rantai_id)
     tanggal_str = kini_wita().strftime("%d %B %Y")
 
     # 1. Part mentah milik runner ini masuk ke folder raw/
@@ -1075,7 +1093,7 @@ def jalan_utama():
         f"(install+checkout sudah memakan {int(elapsed_saat_mulai)}d dari quota {ARGS.max_umur}d)")
 
     tanggal = kini_wita().strftime("%d-%m-%Y")
-    dasar = f"VOT-Denpasar_{tanggal}_{ARGS.sesi}_rantai{ARGS.rantai_id}_n{ARGS.nomor}"
+    dasar = f"VOT-Denpasar_{tanggal}_rantai{ARGS.rantai_id}_n{ARGS.nomor}"
     bagian_daftar, manifest = [], []
     batas_total = ARGS.durasi or None
     sudah_rekam = 0
@@ -1291,7 +1309,8 @@ def jalan_utama():
 
     tutup = lewat_jam_tutup(ARGS.jam_tutup, ARGS.tanpa_batas_waktu) or sudah_diminta_berhenti(
         ARGS.map_rekaman, ARGS.perintah)
-    sesi_berikutnya = ARGS.sesi + 1 if off_air_selesai else ARGS.sesi
+    # Estafet V3: 1 tanggal = 1 master arsip harian utuh (selalu sesi 1, tanpa pemisahan identifier)
+    sesi_berikutnya = 1
     if not tutup and not sudah_picu:
         # Lari pendek / pergantian sesi: picu penerus lewat Cloudflare Worker
         status_picu = picu_penerus_via_worker(
@@ -1380,9 +1399,9 @@ def jalan_utama():
     # 3. Master Harian di luar folder raw/ (root Archive.org):
     #    - Runner 1: master harian awal adalah part 1 itu sendiri
     #    - Runner > 1: download master harian sebelumnya dari Archive.org, lalu concat part_final
-    nama_master = f"VOT-Denpasar_{tanggal}_{ARGS.sesi}.mp3"
+    nama_master = f"VOT-Denpasar_{tanggal}.mp3"
     master_final = os.path.join(ARGS.map_rekaman, nama_master)
-    ident_harian = f"vot-denpasar-{str(ARGS.rantai_id).replace('-', '')}_{ARGS.sesi}"
+    ident_harian = format_item_identifier(ARGS.rantai_id)
 
     if int(ARGS.nomor) == 1:
         shutil.copyfile(part_final, master_final)

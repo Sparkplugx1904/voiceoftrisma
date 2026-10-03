@@ -118,16 +118,8 @@ export async function triggerWorkflows(env: Env, paksa = false): Promise<{ trigg
 	// Runner harus selalu standby di GitHub Actions agar saat siaran mulai,
 	// detik pertama audio langsung terekam tanpa menunggu antrean boot VM 2-5 menit.
 
-	// 3. Tentukan nomor sesi hari ini (via D1 kv_store)
-	let sesi = 1;
-	try {
-		const keySesi = `sesi_${rantaiId}`;
-		const dataSesi = (await d1GetJson(env.DB, keySesi)) as { sesi?: number } | null;
-		sesi = (dataSesi?.sesi ?? 0) + 1;
-		await d1SetJson(env.DB, keySesi, { sesi, updated_at: Date.now() });
-	} catch (e) {
-		console.warn("[WORKFLOW] Gagal baca/tulis sesi di D1, fallback ke sesi 1:", e);
-	}
+	// 3. Estafet V3: Tepat 1 identifier kanonik per tanggal (selalu sesi 1)
+	const sesi = 1;
 
 	// 4. Dispatch runner #1 untuk standby / rekam 24 jam
 	console.log(`[WATCHDOG 24H] Memulai Runner v3 standby: rantai=${rantaiId} nomor=1 sesi=${sesi}`);
