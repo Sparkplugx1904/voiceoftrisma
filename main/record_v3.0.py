@@ -212,7 +212,8 @@ def waktu_boot_sesungguhnya() -> float:
 
 # ---------- Relay via Cloudflare Worker ----------
 
-def picu_penerus_via_worker(rantai_id, nomor_saya, tumpang, margin, sesi, induk_run_id=""):
+def picu_penerus_via_worker(rantai_id, nomor_saya, tumpang, margin, sesi, induk_run_id="",
+                            target_rantai=None, nomor_target=None):
     """Minta Cloudflare Worker dispatch Runner penerus ke GitHub Actions.
 
     Lebih aman dari panggilan langsung ke GitHub API karena GITHUB_TOKEN
@@ -224,10 +225,11 @@ def picu_penerus_via_worker(rantai_id, nomor_saya, tumpang, margin, sesi, induk_
         log("[RELAY] GH_RELAY_SECRET kosong — tidak bisa picu via Worker. Cek GitHub Secrets.")
         return "tanpa-secret"
 
-    nomor_b = int(nomor_saya) + 1
+    nomor_b = int(nomor_target) if nomor_target is not None else (int(nomor_saya) + 1)
+    r_id = str(target_rantai) if target_rantai is not None else str(rantai_id)
     run_id = os.environ.get("GITHUB_RUN_ID", induk_run_id)
     badan = {
-        "rantai_id":    str(rantai_id),
+        "rantai_id":    r_id,
         "nomor_b":      nomor_b,
         "tumpang":      int(tumpang),
         "margin":       int(margin),
@@ -363,14 +365,30 @@ def sudah_diminta_berhenti(map_rekaman="recordings", perintah="jalan"):
     return False
 
 
-def lewat_jam_tutup(batas="18:30", abaikan=False):
-    """True bila jam WITA sudah >= batas (format HH:MM)."""
+def detik_ke_tengah_malam():
+    """Berapa detik tersisa menuju 23:59:59 WITA hari ini."""
+    now = kini_wita()
+    tengah_malam = now.replace(hour=23, minute=59, second=59, microsecond=999999)
+    sisa = (tengah_malam - now).total_seconds()
+    return max(0.0, sisa)
+
+
+def sudah_lewat_tengah_malam():
+    """True bila waktu WITA sudah mencapai atau melewati 23:59:59."""
+    now = kini_wita()
+    return now.hour == 23 and now.minute == 59 and now.second >= 59
+
+
+def lewat_jam_tutup(batas="23:59:59", abaikan=False):
+    """True bila jam WITA sudah >= batas (format HH:MM atau HH:MM:SS)."""
     if abaikan:
         return False
     try:
-        jam, menit = batas.split(":")
+        parts = [int(x) for x in str(batas).split(":")]
         now = kini_wita()
-        return (now.hour, now.minute) >= (int(jam), int(menit))
+        if len(parts) == 3:
+            return (now.hour, now.minute, now.second) >= (parts[0], parts[1], parts[2])
+        return (now.hour, now.minute) >= (parts[0], parts[1])
     except Exception:
         return False
 
@@ -394,16 +412,17 @@ def jeda_tahap(detik_berlalu):
 
 def tunggu_siaran(url_stats, url_stream, mulai=None, titik_picu=None, max_umur=None,
                   rantai_id=None, nomor=1, tumpang=900, margin=300,
-                  perintah="jalan", jam_tutup="18:30", tanpa_batas_waktu=False,
+                  perintah="jalan", jam_tutup="23:59:59", tanpa_batas_waktu=False,
                   sesi=1, sudah_picu=False, status_picu="belum-waktunya",
-                  picu_ulang_pada=0.0):
+                  picu_ulang_pada=0.0, sudah_picu_hari_esok=False,
+                  picu_esok_ulang_pada=0.0):
     """Polling sopan sampai ON-AIR dengan dukungan estafet standby 24 jam.
 
     Timer umur diukur dari t_mulai yang dikirim pemanggil — idealnya epoch
     waktu boot sesungguhnya (dari GitHub API), bukan time.monotonic() baru.
 
-    Kembalikan tuple (status, sudah_picu, status_picu, picu_ulang_pada):
-      status: "on-air" | "selesai" (umur habis) | "batal"
+    Kembalikan tuple (status, sudah_picu, status_picu, picu_ulang_pada, sudah_picu_hari_esok, picu_esok_ulang_pada):
+      status: "on-air" | "selesai" (umur habis) | "tengah-malam" | "batal"
     """
     set_tunnel_status("standby")
     log(f"[TUNGGU] menunggu siaran — cek ke: {url_stats}")
@@ -418,11 +437,30 @@ def tunggu_siaran(url_stats, url_stream, mulai=None, titik_picu=None, max_umur=N
     while True:
         if ARGS and sudah_diminta_berhenti(perintah=getattr(ARGS, "perintah", perintah)):
             log("[BERHENTI] perintah berhenti saat menunggu. Batal.")
-            return "batal", sudah_picu, status_picu, picu_ulang_pada
-        if ARGS and lewat_jam_tutup(getattr(ARGS, "jam_tutup", jam_tutup),
-                                    getattr(ARGS, "tanpa_batas_waktu", tanpa_batas_waktu)):
-            log("[TUTUP] sudah lewat jam tutup saat menunggu. Batal.")
-            return "batal", sudah_picu, status_picu, picu_ulang_pada
+            return "batal", sudah_picu, status_picu, picu_ulang_pada, sudah_picu_hari_esok, picu_esok_ulang_pada
+
+        # 0. Cek batas tengah malam / jam tutup harian
+        sisa_hari_ini = detik_ke_tengah_malam()
+        if not sudah_picu_hari_esok and sisa_hari_ini <= 900 and time.time() >= picu_esok_ulang_pada:
+            besok_str = (kini_wita().date() + datetime.timedelta(days=1)).strftime("%Y-%m-%d")
+            log(f"[TRANSISI HARI STANDBY] Waktu {kini_wita().strftime('%H:%M:%S')} WITA (<=15m ke tengah malam). "
+                f"Picu Runner #1 Hari Esok ({besok_str}) via Cloudflare Worker...")
+            status_esok = picu_penerus_via_worker(
+                besok_str, nomor_saya=0, tumpang=int(tumpang), margin=int(margin), sesi=1,
+                target_rantai=besok_str, nomor_target=1
+            )
+            log(f"[TRANSISI HARI STANDBY] status picu hari esok: {status_esok}")
+            if status_esok == "terpicu":
+                sudah_picu_hari_esok = True
+            elif status_esok in ("gagal", "tanpa-secret"):
+                picu_esok_ulang_pada = time.time() + 120
+            else:
+                sudah_picu_hari_esok = True
+
+        if sudah_lewat_tengah_malam() or (ARGS and lewat_jam_tutup(getattr(ARGS, "jam_tutup", jam_tutup),
+                                                                  getattr(ARGS, "tanpa_batas_waktu", tanpa_batas_waktu))):
+            log("[TRANSISI HARI STANDBY] Pukul 23:59:59 WITA tercapai saat standby. Menutup hari ini untuk merge final.")
+            return "tengah-malam", sudah_picu, status_picu, picu_ulang_pada, sudah_picu_hari_esok, picu_esok_ulang_pada
 
         now = kini_wita()
         if now.hour != awal_jam:
@@ -454,7 +492,7 @@ def tunggu_siaran(url_stats, url_stream, mulai=None, titik_picu=None, max_umur=N
         if umur >= t_max:
             log(f"[ESTAFET STANDBY] umur #{nomor} {int(umur)}d >= batas {t_max}d. "
                 f"Selesai giliran standby, serahkan ke penerus.")
-            return "selesai", sudah_picu, status_picu, picu_ulang_pada
+            return "selesai", sudah_picu, status_picu, picu_ulang_pada, sudah_picu_hari_esok, picu_esok_ulang_pada
 
         # 3. Cek apakah pemancar sudah ON-AIR
         try:
@@ -466,7 +504,7 @@ def tunggu_siaran(url_stats, url_stream, mulai=None, titik_picu=None, max_umur=N
                 if '"streamstatus":1' in bersih:
                     log("[OK] siaran ON-AIR — mulai merekam detik ini juga!")
                     set_tunnel_status("recording")
-                    return "on-air", sudah_picu, status_picu, picu_ulang_pada
+                    return "on-air", sudah_picu, status_picu, picu_ulang_pada, sudah_picu_hari_esok, picu_esok_ulang_pada
                 log(f"[TUNGGU] #{putaran} OFF-AIR (umur {int(umur)}d/{t_max}d), cek lagi {jeda}d.")
             else:
                 log(f"[TUNGGU] #{putaran} stats HTTP {r.status_code}, cek lagi {jeda}d.")
@@ -545,6 +583,7 @@ def rekam_satu_bagian(url, keluar, detik, stats_url=""):
 
     mulai = time.time()
     off_air_terdeteksi = False
+    tengah_malam_tercapai = False
 
     while proc.poll() is None:
         time.sleep(3)
@@ -555,7 +594,16 @@ def rekam_satu_bagian(url, keluar, detik, stats_url=""):
             _hentikan_ffmpeg(proc)
             break
 
-        # 2. Cek apakah pemancar sudah resmi OFF-AIR di server stats
+        # 2. Cek apakah batas tengah malam (23:59:59 WITA) / jam tutup tercapai
+        if ARGS and lewat_jam_tutup(getattr(ARGS, "jam_tutup", "23:59:59"),
+                                    getattr(ARGS, "tanpa_batas_waktu", False)):
+            log("[TRANSISI HARI] Pukul 23:59:59 WITA tercapai saat merekam. "
+                "Menutup potongan audio ini secara presisi...")
+            tengah_malam_tercapai = True
+            _hentikan_ffmpeg(proc)
+            break
+
+        # 3. Cek apakah pemancar sudah resmi OFF-AIR di server stats
         if stats_url and (time.time() - mulai >= 6):
             try:
                 r = requests.get(stats_url, timeout=3,
@@ -569,7 +617,7 @@ def rekam_satu_bagian(url, keluar, detik, stats_url=""):
             except Exception:
                 pass
 
-        # 3. Batas waktu maksimum (detik + 60s)
+        # 4. Batas waktu maksimum (detik + 60s)
         if time.time() - mulai > int(detik) + 60:
             log(f"[WARN] ffmpeg melebihi batas waktu {detik}s + 60s. Menghentikan.")
             _hentikan_ffmpeg(proc)
@@ -577,11 +625,11 @@ def rekam_satu_bagian(url, keluar, detik, stats_url=""):
 
     ada = os.path.exists(keluar)
     ukuran = os.path.getsize(keluar) if ada else 0
-    # Berkas valid jika ada data audio (min 16KB bila OFF-AIR di tengah jalan)
-    min_byte = 16384 if off_air_terdeteksi else max(1024, int(min(detik, 10) * 2000))
+    # Berkas valid jika ada data audio (min 16KB bila OFF-AIR atau tengah malam di tengah jalan)
+    min_byte = 16384 if (off_air_terdeteksi or tengah_malam_tercapai) else max(1024, int(min(detik, 10) * 2000))
     if ada and ukuran >= min_byte:
-        return True, off_air_terdeteksi
-    return False, off_air_terdeteksi
+        return True, off_air_terdeteksi, tengah_malam_tercapai
+    return False, off_air_terdeteksi, tengah_malam_tercapai
 
 
 def tulis_ekor(bagian_terakhir, map_rekaman, rantai_id, nomor, tumpang_detik):
@@ -863,7 +911,7 @@ def unduh_ekor_induk(map_warisan, rantai_id, induk_run_id, batas_tunggu=720):
                 f"/actions/runs/{induk_run_id}/artifacts",
                 headers=kepala, params={"per_page": 30}, timeout=20).json()
             cocok = [a for a in d.get("artifacts", [])
-                     if str(a.get("name", "")).startswith(f"estafet-ekor-{rantai_id}-")]
+                     if str(a.get("name", "")).startswith("estafet-ekor-")]
             if cocok:
                 art = cocok[0]
                 log(f"[WARISAN] artifact ketemu: {art['name']} — unduh...")
@@ -979,7 +1027,7 @@ def jalan_utama():
     urai.add_argument("--margin", type=int, default=300)    # 5 menit toleransi antrean
     urai.add_argument("--bagian", type=int, default=600)    # chunk 10 menit
     urai.add_argument("--max-umur", type=int, default=19800)  # 5j30m dari boot
-    urai.add_argument("--jam-tutup", default="18:30")
+    urai.add_argument("--jam-tutup", default="23:59:59")
     urai.add_argument("--tanpa-batas-waktu", action="store_true")
     urai.add_argument("--stream-url", default=os.environ.get("STREAM_URL", ""))
     urai.add_argument("--stats-url", default="https://i.klikhost.com:8502/stats?json=1")
@@ -1037,10 +1085,12 @@ def jalan_utama():
     titik_picu = max(0, int(ARGS.max_umur) - int(ARGS.tumpang) - int(ARGS.margin))
     sudah_picu, status_picu = False, "belum-waktunya"
     picu_ulang_pada = 0.0
+    sudah_picu_hari_esok = False
+    picu_esok_ulang_pada = 0.0
     log(f"[ESTAFET] titik_picu: {titik_picu}d dari boot, batas: {ARGS.max_umur}d dari boot.")
 
     if not ARGS.lewati_cek:
-        status_tunggu, sudah_picu, status_picu, picu_ulang_pada = tunggu_siaran(
+        status_tunggu, sudah_picu, status_picu, picu_ulang_pada, sudah_picu_hari_esok, picu_esok_ulang_pada = tunggu_siaran(
             ARGS.stats_url, ARGS.stream_url,
             mulai=mulai_boot,          # epoch seconds — titik nol dari boot
             titik_picu=titik_picu,
@@ -1048,13 +1098,16 @@ def jalan_utama():
             tumpang=int(ARGS.tumpang), margin=int(ARGS.margin), perintah=ARGS.perintah,
             jam_tutup=ARGS.jam_tutup, tanpa_batas_waktu=ARGS.tanpa_batas_waktu,
             sesi=ARGS.sesi, sudah_picu=sudah_picu, status_picu=status_picu,
-            picu_ulang_pada=picu_ulang_pada
+            picu_ulang_pada=picu_ulang_pada,
+            sudah_picu_hari_esok=sudah_picu_hari_esok,
+            picu_esok_ulang_pada=picu_esok_ulang_pada
         )
-        if status_tunggu == "selesai":
-            log("[ESTAFET STANDBY] umur standby habis, serah terima selesai tanpa siaran. Keluar sukses.")
+        if status_tunggu in ("selesai", "tengah-malam"):
+            log("[ESTAFET STANDBY] umur standby habis atau tengah malam tercapai. Keluar sukses.")
             return 0
         elif status_tunggu == "batal":
             log("[BERHENTI] tunggu siaran dibatalkan (perintah/jam tutup).")
+            return 0
             return 0
     else:
         log("[LEWAT] cek siaran dilewati.")
@@ -1065,8 +1118,27 @@ def jalan_utama():
         if sudah_diminta_berhenti(ARGS.map_rekaman, ARGS.perintah):
             log("[BERHENTI] berhenti di antara bagian.")
             break
-        if lewat_jam_tutup(ARGS.jam_tutup, ARGS.tanpa_batas_waktu):
-            log("[TUTUP] jam tutup tercapai. Setop merekam.")
+        # 0. Cek batas tengah malam / jam tutup harian
+        sisa_hari_ini = detik_ke_tengah_malam()
+        if not sudah_picu_hari_esok and sisa_hari_ini <= 900 and time.time() >= picu_esok_ulang_pada:
+            besok_str = (kini_wita().date() + datetime.timedelta(days=1)).strftime("%Y-%m-%d")
+            log(f"[TRANSISI HARI] Waktu {kini_wita().strftime('%H:%M:%S')} WITA (<=15m ke tengah malam). "
+                f"Picu Runner #1 Hari Esok ({besok_str}) via Cloudflare Worker...")
+            status_esok = picu_penerus_via_worker(
+                besok_str, nomor_saya=0, tumpang=int(ARGS.tumpang), margin=int(ARGS.margin), sesi=1,
+                target_rantai=besok_str, nomor_target=1
+            )
+            log(f"[TRANSISI HARI] Status pemicu Runner Hari Esok: {status_esok}")
+            if status_esok == "terpicu":
+                sudah_picu_hari_esok = True
+            elif status_esok in ("gagal", "tanpa-secret"):
+                picu_esok_ulang_pada = time.time() + 120
+            else:
+                sudah_picu_hari_esok = True
+
+        if sudah_lewat_tengah_malam() or lewat_jam_tutup(ARGS.jam_tutup, ARGS.tanpa_batas_waktu):
+            log("[TRANSISI HARI] Pukul 23:59:59 WITA tercapai — hari ini resmi selesai! "
+                "Melakukan cut rekaman dan persiapan merge harian final.")
             break
 
         # Umur dihitung dari waktu boot sesungguhnya (epoch)
@@ -1076,7 +1148,6 @@ def jalan_utama():
             break
 
         # ═══ PICU RUNNER PENERUS LEWAT CLOUDFLARE (saat umur >= titik_picu) ═══
-        # A lanjut merekam setelah picu (tumpang 15 menit) sampai B konfirmasi siap.
         if not sudah_picu and umur >= titik_picu and time.time() >= picu_ulang_pada:
             status_picu = picu_penerus_via_worker(
                 ARGS.rantai_id, int(ARGS.nomor), int(ARGS.tumpang),
@@ -1098,38 +1169,54 @@ def jalan_utama():
         panjang = ARGS.bagian if sisa is None else min(ARGS.bagian, sisa)
         berkas = os.path.join(ARGS.map_rekaman, f"{dasar}_{idx:03d}.mp3")
         log(f"[REKAM] bagian {idx} ({panjang}d) -> {berkas}")
-        ok, off_air_di_tengah = rekam_satu_bagian(ARGS.stream_url, berkas, panjang, stats_url=ARGS.stats_url)
-        if off_air_di_tengah:
-            off_air_selesai = True
+        ok, off_air_di_tengah, tengah_malam_tercapai = rekam_satu_bagian(
+            ARGS.stream_url, berkas, panjang, stats_url=ARGS.stats_url
+        )
+
         if not ok:
-            if off_air_di_tengah:
-                log("[OFF-AIR] Pemancar resmi OFF-AIR sebelum/saat bagian ini. Menutup sesi rekaman.")
-                break
-            # Retry dengan jeda bertahap: 5 → 15 → 30 → 60 → 90 detik
-            for jeda_coba, tunggu in enumerate([5, 15, 30, 60, 90], 1):
-                log(f"[WARN] bagian gagal (coba {jeda_coba}), tunggu {tunggu}d lalu ulangi.")
-                time.sleep(tunggu)
-                ok, off_air_di_tengah = rekam_satu_bagian(ARGS.stream_url, berkas, panjang, stats_url=ARGS.stats_url)
-                if off_air_di_tengah:
-                    off_air_selesai = True
-                if ok or off_air_di_tengah:
+            # Jika gagal karena OFF-AIR atau tengah malam
+            if off_air_di_tengah or tengah_malam_tercapai:
+                if tengah_malam_tercapai or sudah_lewat_tengah_malam():
+                    log("[TRANSISI HARI] Tengah malam 23:59:59 WITA tercapai. Menutup hari ini untuk merge harian.")
                     break
-            if not ok:
-                # Cek apakah pemancar resmi OFF-AIR (siaran sesi ini telah selesai)
-                off_air = False
-                try:
-                    r = requests.get(ARGS.stats_url, timeout=5, verify=False)
-                    if r.status_code == 200 and '"streamstatus":0' in r.text.replace(" ", ""):
-                        off_air = True
-                except Exception:
-                    pass
-                if off_air or off_air_selesai:
-                    log("[OFF-AIR] Pemancar resmi OFF-AIR (siaran sesi ini selesai). Menutup sesi rekaman.")
-                    off_air_selesai = True
+                # Jika OFF-AIR di siang hari: Runner TETAP AKTIF di VM ini (standby)!
+                log(f"[STANDBY] Siaran OFF-AIR di siang hari. Runner #{ARGS.nomor} TETAP AKTIF di VM ini "
+                    f"(sisa umur: {int(ARGS.max_umur - umur)}d). Menunggu siaran ON-AIR kembali...")
+                status_tunggu, sudah_picu, status_picu, picu_ulang_pada, sudah_picu_hari_esok, picu_esok_ulang_pada = tunggu_siaran(
+                    ARGS.stats_url, ARGS.stream_url,
+                    mulai=mulai_boot, titik_picu=titik_picu, max_umur=ARGS.max_umur,
+                    rantai_id=ARGS.rantai_id, nomor=int(ARGS.nomor),
+                    tumpang=int(ARGS.tumpang), margin=int(ARGS.margin), perintah=ARGS.perintah,
+                    jam_tutup=ARGS.jam_tutup, tanpa_batas_waktu=ARGS.tanpa_batas_waktu,
+                    sesi=ARGS.sesi, sudah_picu=sudah_picu, status_picu=status_picu,
+                    picu_ulang_pada=picu_ulang_pada,
+                    sudah_picu_hari_esok=sudah_picu_hari_esok,
+                    picu_esok_ulang_pada=picu_esok_ulang_pada
+                )
+                if status_tunggu == "on-air":
+                    log("[OK] Siaran ON-AIR kembali — melanjutkan perekaman di runner ini!")
+                    continue
+                elif status_tunggu in ("selesai", "tengah-malam", "batal"):
                     break
-                log("[ERROR] bagian gagal 5x beruntun tapi pemancar masih ON-AIR. Lewati bagian ini, lanjut rekam.")
-                idx += 1
-                continue
+            else:
+                # Retry jika error jaringan sementara
+                for jeda_coba, tunggu in enumerate([5, 15, 30, 60, 90], 1):
+                    log(f"[WARN] bagian gagal (coba {jeda_coba}), tunggu {tunggu}d lalu ulangi.")
+                    time.sleep(tunggu)
+                    ok, off_air_di_tengah, tengah_malam_tercapai = rekam_satu_bagian(
+                        ARGS.stream_url, berkas, panjang, stats_url=ARGS.stats_url
+                    )
+                    if ok or off_air_di_tengah or tengah_malam_tercapai:
+                        break
+                if not ok:
+                    if off_air_di_tengah or tengah_malam_tercapai:
+                        if tengah_malam_tercapai or sudah_lewat_tengah_malam():
+                            break
+                        continue
+                    log("[ERROR] bagian gagal 5x beruntun tapi pemancar masih ON-AIR. Lewati bagian ini, lanjut rekam.")
+                    idx += 1
+                    continue
+
         try:
             info = {"berkas": os.path.basename(berkas), "sha256": sha256_berkas(berkas),
                     "byte": os.path.getsize(berkas),
@@ -1141,9 +1228,32 @@ def jalan_utama():
         manifest.append(info)
         sudah_rekam += panjang
 
-        if off_air_di_tengah:
-            log("[OFF-AIR] Bagian rekaman terakhir tersimpan rapi. Menutup sesi tayang siaran.")
+        # Jika chunk ini dipotong karena tengah malam
+        if tengah_malam_tercapai or sudah_lewat_tengah_malam():
+            log("[TRANSISI HARI] Pukul 23:59:59 WITA tercapai. Bagian terakhir hari ini tersimpan rapi.")
             break
+
+        # Jika chunk ini dipotong karena OFF-AIR di siang hari
+        if off_air_di_tengah:
+            log(f"[STANDBY] Siaran jeda setelah bagian {idx}. Runner #{ARGS.nomor} TETAP AKTIF di VM ini "
+                f"(sisa umur: {int(ARGS.max_umur - umur)}d). Menunggu siaran ON-AIR kembali...")
+            status_tunggu, sudah_picu, status_picu, picu_ulang_pada, sudah_picu_hari_esok, picu_esok_ulang_pada = tunggu_siaran(
+                ARGS.stats_url, ARGS.stream_url,
+                mulai=mulai_boot, titik_picu=titik_picu, max_umur=ARGS.max_umur,
+                rantai_id=ARGS.rantai_id, nomor=int(ARGS.nomor),
+                tumpang=int(ARGS.tumpang), margin=int(ARGS.margin), perintah=ARGS.perintah,
+                jam_tutup=ARGS.jam_tutup, tanpa_batas_waktu=ARGS.tanpa_batas_waktu,
+                sesi=ARGS.sesi, sudah_picu=sudah_picu, status_picu=status_picu,
+                picu_ulang_pada=picu_ulang_pada,
+                sudah_picu_hari_esok=sudah_picu_hari_esok,
+                picu_esok_ulang_pada=picu_esok_ulang_pada
+            )
+            if status_tunggu == "on-air":
+                log("[OK] Siaran ON-AIR kembali — melanjutkan perekaman di runner ini!")
+                idx += 1
+                continue
+            elif status_tunggu in ("selesai", "tengah-malam", "batal"):
+                break
 
         # ═══ SINYAL "SIAP" UNTUK RUNNER SEBELUMNYA (Runner B) ═══
         # B mengirimkan sinyal ke Cloudflare begitu chunk pertama selesai.
@@ -1204,7 +1314,8 @@ def jalan_utama():
 
     # B membuktikan sambung: unduh ekor induk (kalau ada), bandingkan ISI
     # melawan AWALAN sendiri (isi kembar selalu mulai di detik 0 milik B).
-    if int(ARGS.nomor) > 1:
+    butuh_trim_seamless = (int(ARGS.nomor) > 1) or (int(ARGS.nomor) == 1 and bool(ARGS.induk_run_id))
+    if butuh_trim_seamless:
         unduh_ekor_induk(ARGS.map_warisan, ARGS.rantai_id, ARGS.induk_run_id,
                          batas_tunggu=(0 if not ambil_token() else 720))
         try:
@@ -1231,10 +1342,10 @@ def jalan_utama():
         log(f"[ERROR] gabung internal gagal: {type(e).__name__}: {e}")
         part_mentah = bagian_daftar[-1]
 
-    # 2. Seamless Trimming: Jika Runner > 1, potong pangkal audio sendiri
-    #    agar mulai tepat di mana Runner sebelumnya berhenti (anti-gap, anti-dobel).
+    # 2. Seamless Trimming: Jika Runner > 1 ATAU Runner == 1 dengan induk_run_id (transisi tengah malam),
+    #    potong pangkal audio sendiri agar mulai tepat di mana Runner sebelumnya berhenti (anti-gap, anti-dobel).
     part_final = part_mentah
-    if int(ARGS.nomor) > 1:
+    if butuh_trim_seamless:
         json_warisan = unduh_ekor_induk(ARGS.map_warisan, ARGS.rantai_id, ARGS.induk_run_id,
                                         batas_tunggu=(0 if not ambil_token() else 720))
         ekor_mp3 = None
