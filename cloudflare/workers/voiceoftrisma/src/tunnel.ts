@@ -283,6 +283,14 @@ export class TunnelHubDO implements DurableObject {
 			return json({ ok: true });
 		}
 
+		// 6. HTTP POST: Reset semua VM menjadi disconnected (saat restart)
+		if (path === "/reset" && request.method === "POST") {
+			for (const vm of this.vms.values()) {
+				vm.status = "disconnected";
+			}
+			return json({ ok: true });
+		}
+
 		return json({ error: "Not found" }, 404);
 	}
 }
@@ -349,7 +357,18 @@ async function handleTunnelRestart(request: Request, env: Env): Promise<Response
 		}
 	}
 
-	// 3. Dispatch run baru dengan nomor 1 atau sesi berikutnya
+	// 3. Reset status VM di Durable Object agar runner baru tidak terblokir anti-kembar
+	if (env.TUNNEL_HUB) {
+		try {
+			const id = env.TUNNEL_HUB.idFromName("GlobalTunnel");
+			await env.TUNNEL_HUB.get(id).fetch("https://internal/tunnel/reset", { method: "POST" });
+		} catch {}
+	}
+
+	// Jeda 3 detik agar sinyal pembatalan efektif
+	await new Promise((r) => setTimeout(r, 3000));
+
+	// 4. Dispatch run baru dengan nomor 1 atau sesi berikutnya
 	const nowWita = new Date(Date.now() + 8 * 3600 * 1000);
 	const rantaiId = nowWita.toISOString().slice(0, 10);
 	const urlDispatch = `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/actions/workflows/${encodeURIComponent(WORKFLOW_V3)}/dispatches`;
