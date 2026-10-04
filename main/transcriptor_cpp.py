@@ -2,6 +2,7 @@
 
 import sys
 import os
+import shutil
 import subprocess
 import re
 import json
@@ -10,11 +11,17 @@ from pathlib import Path
 from typing import List, Tuple, Optional
 import argparse
 
+if sys.platform == "win32":
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    if hasattr(sys.stderr, "reconfigure"):
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 try:
     import numpy as np
 except ImportError as e:
-    print(f"[✗✗✗] FATAL: GAGAL MENGIMPOR PUSTAKA PENTING: {e}", file=sys.stderr)
-    print("[✗✗✗] FATAL: Pastikan Anda telah menjalankan 'pip install -r requirements/transcript.txt' (minimal numpy)", file=sys.stderr)
+    print(f"[FATAL] FATAL: GAGAL MENGIMPOR PUSTAKA PENTING: {e}", file=sys.stderr)
+    print("[FATAL] Pastikan Anda telah menjalankan 'pip install -r requirements/transcript.txt' (minimal numpy)", file=sys.stderr)
     sys.exit(1)
 
 # --- Sistem Logging Kustom Sederhana ---
@@ -25,7 +32,7 @@ def log_info(msg):
 
 def log_success(msg):
     """Mencatat pesan sukses."""
-    print(f"[✓] {msg}")
+    print(f"[OK] {msg}")
 
 def log_warn(msg):
     """Mencatat pesan peringatan."""
@@ -33,41 +40,99 @@ def log_warn(msg):
 
 def log_error(msg, exit_app=False):
     """Mencatat pesan error. Jika exit_app=True, hentikan skrip."""
-    print(f"[✗] ERROR: {msg}", file=sys.stderr)
+    print(f"[X] ERROR: {msg}", file=sys.stderr)
     if exit_app:
         sys.exit(1)
 
 # --- Konfigurasi ---
 VALID_MODELS = ["tiny", "base", "small", "medium", "large-v1", "large-v2", "large-v3", "large-v3-turbo"]
 DEFAULT_MODEL_NAME = "small"
+DEFAULT_PROMPT = "Voice of Trisma, Madyapadma, Sobat Trisma, Profil Siswa Berprestasi."
 # --------------------
 
 # --- Fungsi Inti ---
 
-def check_dependencies():
-    """Memeriksa dependensi eksternal 'curl' dan 'whisper-cli'."""
-    os.system("chmod +x ./bin/*")
+def check_dependencies() -> Tuple[Path, Path]:
+    """Memeriksa dependensi eksternal 'curl', 'ffmpeg', dan 'whisper-cli'."""
+    if os.name != 'nt':
+        os.system("chmod +x ./bin/* 2>/dev/null")
     log_info("Memeriksa dependensi...")
     dependencies_ok = True
     
-    if subprocess.run(['which', 'curl'], capture_output=True).returncode != 0:
+    # 1. Cek curl
+    if shutil.which("curl") is None:
         log_error("'curl' tidak ditemukan. Harap instal 'curl'.")
         dependencies_ok = False
-    
-    whisper_cli_path = Path("bin/whisper-cli")
-    if not whisper_cli_path.exists():
-        log_error(f"'{whisper_cli_path}' tidak ditemukan. Pastikan Anda telah mengompilasi whisper.cpp.")
+        
+    # 2. Cek ffmpeg
+    ffmpeg_bin = None
+    if os.name == 'nt':
+        ffmpeg_candidates = [
+            Path("bin/win64/ffmpeg.exe"),
+            Path("bin/ffmpeg.exe"),
+            Path("ffmpeg.exe"),
+        ]
+        for c in ffmpeg_candidates:
+            if c.exists():
+                ffmpeg_bin = c.resolve()
+                break
+        if not ffmpeg_bin and shutil.which("ffmpeg"):
+            ffmpeg_bin = Path(shutil.which("ffmpeg")).resolve()
+    else:
+        ffmpeg_candidates = [
+            Path("bin/ffmpeg"),
+            Path("ffmpeg"),
+        ]
+        for c in ffmpeg_candidates:
+            if c.exists():
+                ffmpeg_bin = c.resolve()
+                break
+        if not ffmpeg_bin and shutil.which("ffmpeg"):
+            ffmpeg_bin = Path(shutil.which("ffmpeg")).resolve()
+        
+    if not ffmpeg_bin:
+        log_error("'ffmpeg' tidak ditemukan. Pastikan ffmpeg terpasang.")
+        dependencies_ok = False
+        
+    # 3. Cek whisper-cli
+    whisper_cli_path = None
+    if os.name == 'nt':
+        whisper_candidates = [
+            Path("bin/win64/whisper-cli.exe"),
+            Path("bin/whisper-cli.exe"),
+            Path("whisper-cli.exe"),
+        ]
+        for c in whisper_candidates:
+            if c.exists():
+                whisper_cli_path = c.resolve()
+                break
+        if not whisper_cli_path and shutil.which("whisper-cli"):
+            whisper_cli_path = Path(shutil.which("whisper-cli")).resolve()
+    else:
+        whisper_candidates = [
+            Path("bin/whisper-cli"),
+            Path("whisper-cli"),
+        ]
+        for c in whisper_candidates:
+            if c.exists():
+                whisper_cli_path = c.resolve()
+                break
+        if not whisper_cli_path and shutil.which("whisper-cli"):
+            whisper_cli_path = Path(shutil.which("whisper-cli")).resolve()
+        
+    if not whisper_cli_path or not whisper_cli_path.exists():
+        log_error("whisper-cli tidak ditemukan. Pastikan binary whisper.cpp tersedia.")
         dependencies_ok = False
     
     if not dependencies_ok:
         log_error("Dependensi tidak lengkap. Keluar.", exit_app=True)
         
     log_success("Semua dependensi inti ditemukan.")
-    return whisper_cli_path
+    return whisper_cli_path, ffmpeg_bin
     
 def download_file(url: str, dest: Path) -> bool:
     """Mengunduh file menggunakan curl."""
-    log_info(f"Mengunduh: {url} → {dest}")
+    log_info(f"Mengunduh: {url} -> {dest}")
     os.makedirs(dest.parent, exist_ok=True)
     try:
         subprocess.run(
@@ -140,7 +205,50 @@ def download_audio(url: str, output_path: Path):
         log_error("Gagal mengunduh audio. Membatalkan.", exit_app=True)
     log_success(f"Audio berhasil diunduh ke {output_path}")
 
-def transcribe_single_audio(audio_path: Path, model_path: Path, whisper_cli_path: Path):
+def preprocess_audio(input_path: Path, ffmpeg_bin: Path) -> Path:
+    """
+    Membersihkan sinyal audio siaran radio sebelum ditranskripsi:
+    - Memangkas dead air di awal (silenceremove)
+    - Memotong letupan nafas mic / plosive P-pop (highpass 80Hz)
+    - Memotong desis elektrik tinggi / white noise seperti hujan (lowpass 7500Hz)
+    - Meredam kebisingan latar studio (afftdn)
+    - Menormalkan level vokal penyiar ke standar broadcast (loudnorm EBU R128)
+    - Mengonversi format ke 16kHz Mono 16-bit WAV untuk whisper.cpp
+    """
+    clean_wav = input_path.with_name(f"{input_path.stem}_clean.wav")
+    log_info(f"Pra-pemrosesan audio (filter desis, dead air & normalisasi loudness): {clean_wav.name}")
+    
+    filter_chain = (
+        "silenceremove=start_periods=1:start_duration=2:start_threshold=-40dB,"
+        "highpass=f=80,"
+        "lowpass=f=7500,"
+        "afftdn=nf=-25,"
+        "loudnorm=I=-16:TP=-1.5:LRA=11"
+    )
+    
+    cmd = [
+        str(ffmpeg_bin), "-y",
+        "-i", str(input_path),
+        "-vn",
+        "-af", filter_chain,
+        "-ar", "16000",
+        "-ac", "1",
+        "-c:a", "pcm_s16le",
+        str(clean_wav)
+    ]
+    
+    try:
+        subprocess.run(cmd, check=True, capture_output=True)
+        log_success(f"Audio bersih siap untuk Whisper: {clean_wav}")
+        return clean_wav
+    except subprocess.CalledProcessError as e:
+        log_warn(f"FFmpeg audio pre-processing gagal ({e}). Menggunakan audio asli.")
+        return input_path
+    except Exception as e:
+        log_warn(f"Error saat pra-pemrosesan FFmpeg: {e}. Menggunakan audio asli.")
+        return input_path
+
+def transcribe_single_audio(audio_path: Path, model_path: Path, whisper_cli_path: Path, ffmpeg_bin: Path, prompt: str = DEFAULT_PROMPT):
     """Mentranskripsi seluruh file audio tunggal menggunakan whisper.cpp CLI."""
     os.makedirs("transcripts", exist_ok=True)
     
@@ -162,22 +270,27 @@ def transcribe_single_audio(audio_path: Path, model_path: Path, whisper_cli_path
     except IOError as e:
         log_error(f"Gagal membersihkan/membuat file transkrip: {e}", exit_app=True)
 
-    log_info(f"Mentranskripsi: {audio_path.name}")
+    # 1. Pra-pemrosesan Audio via FFmpeg
+    clean_audio_path = preprocess_audio(audio_path, ffmpeg_bin)
+    
+    log_info(f"Mentranskripsi: {clean_audio_path.name}")
+    n_threads = str(min(8, os.cpu_count() or 4))
         
     cmd = [
         str(whisper_cli_path),
         "-m", str(model_path),
-        "-f", str(audio_path),
-        "--temperature", "0.0",
-        "--temperature-inc", "0.20",
-        "--beam-size", "1",
-        "--best-of", "1",
-        "-t", "4",
-        "-mc", "0",               # ← Ganti --condition-on-previous-text 0
-        "--no-speech-thold", "0.60",
+        "-f", str(clean_audio_path),
+        "--prompt", prompt,
+        "--carry-initial-prompt", # Jaga panduan kata kunci stasiun sepanjang rekaman
+        "-bo", "5",               # Best of 5 kandidat
+        "-bs", "5",               # Beam search (mencegah kesalahan fonetik lokal)
+        "-nf",                    # Matikan temperature fallback (cegah loop repetisi)
+        "-mc", "32",              # Batasi context window agar tidak mencemari segmen
+        "-t", n_threads,
+        "--no-speech-thold", "0.65", # Tolak segmen hening/musik murni
         "--entropy-thold", "2.40",
         "--logprob-thold", "-1.00",
-        "-sns",                   # ← suppress non-speech tokens (musik, noise)
+        "-sns",                   # Suppress non-speech tokens (lagu/noise)
         "-of", str(output_base_path_temp),
         "-otxt",
         "-osrt",
@@ -186,7 +299,7 @@ def transcribe_single_audio(audio_path: Path, model_path: Path, whisper_cli_path
         "-pp"
     ]
     
-    log_info(f"Menjalankan whisper-cli...")
+    log_info(f"Menjalankan whisper-cli dengan parameter anti-looping & beam search...")
     
     try:
         subprocess.run(cmd, check=True, capture_output=False)
@@ -197,6 +310,13 @@ def transcribe_single_audio(audio_path: Path, model_path: Path, whisper_cli_path
         log_error(f"whisper-cli GAGAL (return code: {e.returncode}). Proses dihentikan.", exit_app=True)
     except Exception as e:
         log_error(f"Error tak terduga saat menjalankan whisper-cli: {e}", exit_app=True)
+    finally:
+        # Bersihkan file audio hasil pembersihan sementara
+        if clean_audio_path != audio_path and clean_audio_path.exists():
+            try:
+                clean_audio_path.unlink()
+            except Exception:
+                pass
 
     # Pindahkan TXT
     try:
@@ -263,6 +383,11 @@ def main():
         "-cm", "--custom-model", 
         help="URL lengkap ke file model GGML/GGUF kustom (.bin/.gguf)."
     )
+    parser.add_argument(
+        "--prompt", 
+        default=DEFAULT_PROMPT, 
+        help=f"Prompt awal untuk memandu konteks dan kosakata. Default: '{DEFAULT_PROMPT}'"
+    )
     
     if len(sys.argv) == 1:
         parser.print_help(sys.stderr)
@@ -275,7 +400,7 @@ def main():
     is_source_url = not os.path.exists(args.source)
     
     try:
-        whisper_cli_path = check_dependencies()
+        whisper_cli_path, ffmpeg_bin = check_dependencies()
         log_info(f"Source: {args.source}")
         
         # 1. Pastikan Model Tersedia
@@ -290,7 +415,13 @@ def main():
             audio_path_to_process = Path(args.source)
 
         # 3. Transkripsi
-        transcribe_single_audio(audio_path_to_process, model_path, whisper_cli_path)
+        transcribe_single_audio(
+            audio_path=audio_path_to_process,
+            model_path=model_path,
+            whisper_cli_path=whisper_cli_path,
+            ffmpeg_bin=ffmpeg_bin,
+            prompt=args.prompt
+        )
         
     except Exception as e:
         log_error(f"Terjadi error fatal yang tidak terduga: {e}", exit_app=False)
@@ -316,6 +447,6 @@ if __name__ == "__main__":
     try:
         main()
     except Exception as e:
-        print(f"[✗✗✗] ERROR GLOBAL TIDAK TERDUGA: {e}", file=sys.stderr)
+        print(f"[FATAL] ERROR GLOBAL TIDAK TERDUGA: {e}", file=sys.stderr)
         traceback.print_exc()
         sys.exit(1)

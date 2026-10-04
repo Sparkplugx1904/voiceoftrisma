@@ -28,6 +28,9 @@ uploads/
 recordings/
 Project/
 TODO.md
+models/
+transcripts/
+scratch/
 
 # --- External tools ---
 act
