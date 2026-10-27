@@ -51,8 +51,8 @@ scratch/
 *.wav
 
 # --- Downloaded AI Models (Whisper GGML/GGUF) ---
-models/
-*.bin
+!models/
+!models/*.bin
 *.gguf
 
 # --- Native Executables & Local Binaries ---
