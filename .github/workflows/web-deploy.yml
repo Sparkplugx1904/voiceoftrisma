@@ -5,9 +5,6 @@ on:
     branches:
       - main
   workflow_dispatch:
-  schedule:
-    - cron: "15 23 * * *"   # Tiap hari jam 23:15 UTC (~07:15 WITA)
-    - cron: "30 7 * * *"    # Tiap hari jam 07:30 UTC (~15:30 WITA)
 
 jobs:
   deploy:
