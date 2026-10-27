@@ -57,6 +57,8 @@ models/
 
 # --- Native Executables & Local Binaries ---
 *.exe
+!bin/win-x64/
+!bin/win-x64/*.exe
 /ffmpeg
 /ffprobe
 /ffplay
