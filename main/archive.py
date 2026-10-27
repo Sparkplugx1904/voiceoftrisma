@@ -1,5 +1,17 @@
 import os
+import sys
+import json
+from pathlib import Path
 from internetarchive import upload
+try:
+    from dotenv import load_dotenv
+    _ROOT_DIR = Path(__file__).resolve().parent.parent
+    for _candidate in [_ROOT_DIR / ".ENV", _ROOT_DIR / ".env", Path(".ENV"), Path(".env")]:
+        if _candidate.is_file():
+            load_dotenv(dotenv_path=_candidate)
+            break
+except ImportError:
+    pass
 
 def log(msg):
     print(msg)
@@ -23,13 +35,24 @@ def upload_transcripts_to_existing_item(folder_path, item_id, access_key, secret
 
     log(f"[ UPLOAD ] Mulai upload {len(files_to_upload)} file ke Archive.org item: {item_id}")
 
+    desc_text = 'Auto transcription and description added by Python script'
+    desc_json_path = os.path.join(folder_path, "description.json")
+    if os.path.exists(desc_json_path):
+        try:
+            with open(desc_json_path, "r", encoding="utf-8") as f:
+                desc_data = json.load(f)
+                if desc_data.get("description"):
+                    desc_text = desc_data["description"]
+        except Exception:
+            pass
+
     try:
         upload(
             item_id,
             files=files_to_upload,
             metadata={
                 'subject': 'Description-Transcription',
-                'description': 'Auto transcription and description added by Python script'
+                'description': desc_text
             },
             access_key=access_key,
             secret_key=secret_key,
@@ -45,18 +68,19 @@ def upload_transcripts_to_existing_item(folder_path, item_id, access_key, secret
 
     except Exception as e:
         log(f"[ ERROR ] Upload gagal: {e}")
-
+        sys.exit(1)
 
 # ===============================
 # Contoh pemakaian
 # ===============================
 if __name__ == "__main__":
     # Ambil key dari environment variable
-    MY_ACCESS_KEY = os.environ.get("MY_ACCESS_KEY")
-    MY_SECRET_KEY = os.environ.get("MY_SECRET_KEY")
+    IA_ACCESS_KEY = os.environ.get("IA_ACCESS_KEY") or os.environ.get("MY_ACCESS_KEY")
+    IA_SECRET_KEY = os.environ.get("IA_SECRET_KEY") or os.environ.get("MY_SECRET_KEY")
     ITEM_ID = os.environ.get("ITEM_ID")  # ID dari GitHub Actions matrix
 
-    if not all([MY_ACCESS_KEY, MY_SECRET_KEY, ITEM_ID]):
-        log("[ ERROR ] Pastikan MY_ACCESS_KEY, MY_SECRET_KEY, dan ITEM_ID sudah di-set di environment.")
+    if not all([IA_ACCESS_KEY, IA_SECRET_KEY, ITEM_ID]):
+        log("[ ERROR ] Pastikan IA_ACCESS_KEY, IA_SECRET_KEY, dan ITEM_ID sudah di-set di environment.")
+        sys.exit(1)
     else:
-        upload_transcripts_to_existing_item("transcripts", ITEM_ID, MY_ACCESS_KEY, MY_SECRET_KEY)
+        upload_transcripts_to_existing_item("transcripts", ITEM_ID, IA_ACCESS_KEY, IA_SECRET_KEY)

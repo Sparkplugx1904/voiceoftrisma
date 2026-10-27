@@ -1,4 +1,4 @@
-name: 🚀 Deploy to GitHub Pages
+name: 🚀 Deploy to GitHub & Cloudflare Pages
 
 on:
   push:
@@ -25,27 +25,28 @@ jobs:
           repository: Sparkplugx1904/voiceoftrisma
           sparse-checkout: |
             template/main
-            bin
           path: template
 
-      - name: Setup and deploy
-        env:
-          WEB_TOKEN_SECRET: ${{ secrets.WEB_TOKEN }}
-          MP_WEB_TOKEN_SECRET: ${{ secrets.MP_WEB_TOKEN }}
+      - name: Taking Resources
         run: |
           set -e
-
-          echo "[ 1 / 6 ] Siapkan direktori web..."
+          echo "[ 1 / 2 ] Siapkan direktori web..."
           mkdir -p web
           ls -la template/
 
-          echo "[ 2 / 6 ] Pindahkan template deploy..."
+          echo "[ 2 / 2 ] Pindahkan template deploy..."
           rsync -av --delete template/template/main/ web/ || cp -r template/template/main/* web/
 
-          echo "[ 3 / 6 ] Moved:"
+          echo "Resources siap di web/:"
           ls -la web/
 
-          echo "[ 4 / 6 ] Push to primary repo (voiceoftrisma.github.io)..."
+      - name: Push to Github Pages
+        env:
+          WEB_TOKEN_SECRET: ${{ secrets.WEB_TOKEN }}
+        run: |
+          set -e
+
+          echo "Push to primary repo (voiceoftrisma.github.io)..."
           git clone "https://x-access-token:${WEB_TOKEN_SECRET}@github.com/voiceoftrisma/voiceoftrisma.github.io.git" web-repo
           rsync -av --delete --exclude=.git/ web/ web-repo/
           cd web-repo
@@ -56,14 +57,9 @@ jobs:
           git push
           cd ..
 
-          echo "[ 5 / 6 ] Push to secondary repo (madyapadma/voiceoftrisma)..."
-          git clone "https://x-access-token:${MP_WEB_TOKEN_SECRET}@github.com/madyapadma/voiceoftrisma.git" mp-web-repo
-          rsync -av --delete --exclude=.git/ web/ mp-web-repo/
-          cd mp-web-repo
-          git config user.name "VoT Deploy Bot"
-          git config user.email "deploy@voiceoftrisma.radio"
-          git add -A
-          git diff-index --quiet HEAD || git commit -m "Auto-deploy $(date -u +'%Y-%m-%d %H:%M UTC')"
-          git push
-
-          echo "[ 6 / 6 ] Deploy selesai!"
+      - name: Push to Cloudflare Pages
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CF_TOKEN || secrets.CF_VOICEOFTRISMA || secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID || '662757545c219dc7fe8f563acfc079ca' }}
+          command: pages deploy web --project-name=voiceoftrisma --commit-dirty=true

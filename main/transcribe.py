@@ -21,7 +21,7 @@ try:
     import numpy as np
 except ImportError as e:
     print(f"[FATAL] FATAL: GAGAL MENGIMPOR PUSTAKA PENTING: {e}", file=sys.stderr)
-    print("[FATAL] Pastikan Anda telah menjalankan 'pip install -r requirements/transcript.txt' (minimal numpy)", file=sys.stderr)
+    print("[FATAL] Pastikan Anda telah menjalankan 'pip install -r requirements/transcript' (minimal numpy)", file=sys.stderr)
     sys.exit(1)
 
 # --- Sistem Logging Kustom Sederhana ---
@@ -55,7 +55,7 @@ DEFAULT_PROMPT = "Voice of Trisma, Madyapadma, Sobat Trisma, Profil Siswa Berpre
 def check_dependencies() -> Tuple[Path, Path]:
     """Memeriksa dependensi eksternal 'curl', 'ffmpeg', dan 'whisper-cli'."""
     if os.name != 'nt':
-        os.system("chmod +x ./bin/* 2>/dev/null")
+        os.system("chmod +x ./bin/linux-x64/* ./bin/* 2>/dev/null")
     log_info("Memeriksa dependensi...")
     dependencies_ok = True
     
@@ -68,6 +68,7 @@ def check_dependencies() -> Tuple[Path, Path]:
     ffmpeg_bin = None
     if os.name == 'nt':
         ffmpeg_candidates = [
+            Path("bin/win-x64/ffmpeg.exe"),
             Path("bin/win64/ffmpeg.exe"),
             Path("bin/ffmpeg.exe"),
             Path("ffmpeg.exe"),
@@ -80,6 +81,7 @@ def check_dependencies() -> Tuple[Path, Path]:
             ffmpeg_bin = Path(shutil.which("ffmpeg")).resolve()
     else:
         ffmpeg_candidates = [
+            Path("bin/linux-x64/ffmpeg"),
             Path("bin/ffmpeg"),
             Path("ffmpeg"),
         ]
@@ -98,6 +100,7 @@ def check_dependencies() -> Tuple[Path, Path]:
     whisper_cli_path = None
     if os.name == 'nt':
         whisper_candidates = [
+            Path("bin/win-x64/whisper-cli.exe"),
             Path("bin/win64/whisper-cli.exe"),
             Path("bin/whisper-cli.exe"),
             Path("whisper-cli.exe"),
@@ -110,6 +113,7 @@ def check_dependencies() -> Tuple[Path, Path]:
             whisper_cli_path = Path(shutil.which("whisper-cli")).resolve()
     else:
         whisper_candidates = [
+            Path("bin/linux-x64/whisper-cli"),
             Path("bin/whisper-cli"),
             Path("whisper-cli"),
         ]

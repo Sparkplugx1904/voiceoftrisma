@@ -2,48 +2,78 @@
 # Voice of Trisma — .gitignore
 # ============================================
 
-# --- Editor / IDE ---
-.vscode/
-
-# --- OS artifacts ---
-.DS_Store
-*.exe
-
-# --- Environment ---
+# --- Environment & Secrets ---
 .env
+.ENV
+*.env
+.env.*
+.dev.vars
 
-# --- Dependencies ---
+# --- Python Artifacts & Caches ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*tempCodeRunnerFile.*
+
+# --- Virtual Environments ---
+.venv/
+venv/
+env/
+ENV/
+
+# --- IDE & Editor Settings ---
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# --- Operating System Artifacts ---
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+
+# --- Runtime Data, Logs, & Media Outputs ---
+recordings/
+transcripts/
+uploads/
+temp_guard/
+scratch/
+*.jsonl
+*.srt
+*.wav
+
+# --- Downloaded AI Models (Whisper GGML/GGUF) ---
+models/
+*.bin
+*.gguf
+
+# --- Native Executables & Local Binaries ---
+*.exe
+/ffmpeg
+/ffprobe
+/ffplay
+act
+
+# --- Node.js & Cloudflare Worker Artifacts ---
 node_modules/
+.wrangler/
+dist/
+.mf/
 package.json
 package-lock.json
 
-# --- Python ---
-__pycache__/
-*.pyc
-*.pyo
-*tempCodeRunnerFile.*
-
-# --- Local data ---
-uploads/
-recordings/
-Project/
-TODO.md
-models/
-transcripts/
-scratch/
-
-# --- External tools ---
-act
-
-# --- Binaries ---
-ffmpeg
-ffprobe
-ffplay
-
-# --- Legacy ---
+# --- Legacy & Workspace-Specific ---
 experimental/
 main/mycpp/
-
-# --- Workspace-specific ---
+Project/
+TODO.md
+graphify-out/
 /workspaces/VOT-Denpasar/push
-graphify-out

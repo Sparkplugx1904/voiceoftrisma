@@ -39,17 +39,14 @@ jobs:
       - name: Run recorder (auto-export ENV)
         id: record
         env:
-          MY_ACCESS_KEY: ${{ secrets.MY_ACCESS_KEY }}
-          MY_SECRET_KEY: ${{ secrets.MY_SECRET_KEY }}
-          CDN_PROXY: ${{ secrets.CDN_PROXY }}
-          GH_PROXY: ${{ secrets.GH_PROXY }}
-          GIST_TOKEN: ${{ secrets.GIST_TOKEN }}
+          IA_ACCESS_KEY: ${{ secrets.IA_ACCESS_KEY }}
+          IA_SECRET_KEY: ${{ secrets.IA_SECRET_KEY }}
           HTTP_PROXY: ${{ secrets.HTTP_PROXY }}
           STREAM_URL: ${{ secrets.STREAM_URL }}
 
         run: |
           mkdir -p recordings
-          python3 -u main/record_v2.0.py ${{ matrix.suffix }}
+          python3 -u main/record_v2.py ${{ matrix.suffix }}
 
       - name: Map environment vars to matrix outputs
         id: map
@@ -94,7 +91,7 @@ jobs:
       - name: Transcribe audio
         run: |
           echo "[ INFO ] Transcribing audio_${{ matrix.pair.suffix }}.mp3..."
-          python3 -u main/transcriptor_cpp.py "${{ matrix.pair.url }}" medium
+          python3 -u main/transcribe.py "${{ matrix.pair.url }}" medium
 
       - name: Upload transcript artifact
         uses: actions/upload-artifact@v4
@@ -104,10 +101,10 @@ jobs:
 
       - name: Push transcript to Archive.org
         env:
-          MY_ACCESS_KEY: ${{ secrets.MY_ACCESS_KEY }}
-          MY_SECRET_KEY: ${{ secrets.MY_SECRET_KEY }}
+          IA_ACCESS_KEY: ${{ secrets.IA_ACCESS_KEY }}
+          IA_SECRET_KEY: ${{ secrets.IA_SECRET_KEY }}
           ITEM_ID: ${{ matrix.pair.item }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: |
           python main/descriptor.py transcripts/transcript.srt -o transcripts/description.json
-          python3 -u main/ia.py
+          python3 -u main/archive.py

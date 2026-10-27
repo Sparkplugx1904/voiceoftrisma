@@ -9,7 +9,7 @@ Usage:
   python setup.py record              # Setup environment recording (ffmpeg + pip)
   python setup.py transcript           # Setup environment transkripsi
   python setup.py hybrid               # Setup record + transkripsi
-  # Script rekaman (record_v1.0.py / record_v2.0.py) di-download oleh workflow sendiri.
+  # Script rekaman (record_v1.py / record_v2.py)
 """
 
 import argparse
@@ -116,14 +116,14 @@ def setup_record():
     Setup untuk job "Record Stream and Upload".
 
     Download ffmpeg & ffprobe, chmod +x, pip install requirements record.
-    Script rekaman (record_v1.0.py / record_v2.0.py) di-download oleh workflow sendiri.
+    Script rekaman (record_v1.py / record_v2.py)
     """
     print("\n── Setup record ──\n")
 
     # ── Download ffmpeg & ffprobe ──
     try:
-        download(f"{GH_BASE}/bin/ffmpeg", "ffmpeg")
-        download(f"{GH_BASE}/bin/ffprobe", "ffprobe")
+        download(f"{GH_BASE}/bin/linux-x64/ffmpeg", "ffmpeg")
+        download(f"{GH_BASE}/bin/linux-x64/ffprobe", "ffprobe")
     except RuntimeError as exc:
         print(f"\n❌  Record setup gagal: {exc}")
         print("  ·  Job tidak bisa lanjut tanpa file-file ini.")
@@ -138,10 +138,10 @@ def setup_record():
 
     # ── pip install (dari requirements/ di checkout repo) ──
     try:
-        run([sys.executable, "-m", "pip", "install", "-r", "requirements/record.txt"])
+        run([sys.executable, "-m", "pip", "install", "-r", "requirements/record"])
     except subprocess.CalledProcessError:
         print("\n❌  pip install gagal.")
-        print("  ·  Coba manual: pip install -r requirements/record.txt\n")
+        print("  ·  Coba manual: pip install -r requirements/record\n")
         sys.exit(1)
 
     print("\n✓  Setup record selesai.\n")
@@ -216,14 +216,16 @@ def setup_transcript():
 
     # 2. chmod +x semua binary Whisper-CPP di bin/
     for binfile in WHISPER_BINS:
-        dest = os.path.join("bin", binfile)
+        dest = os.path.join("bin", "linux-x64", binfile)
+        if not os.path.exists(dest):
+            dest = os.path.join("bin", binfile)
         if os.path.exists(dest):
             os.chmod(dest, os.stat(dest).st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
         else:
             print(f"  ·  {dest} not found, skipping.")
 
     # 3. pip install dependencies untuk transkripsi
-    req = os.path.join(os.path.dirname(__file__), "..", "requirements", "transcript.txt")
+    req = os.path.join(os.path.dirname(__file__), "..", "requirements", "transcript")
     if os.path.exists(req):
         run([sys.executable, "-m", "pip", "install", "-r", req])
     else:
@@ -233,6 +235,15 @@ def setup_transcript():
     run(["sudo", "apt", "install", "-y", "internetarchive"])
 
     print("\n✓  Setup transcript selesai.\n")
+
+def setup_guard():
+    """
+    Setup untuk job Pipeline Guard (inspeksi arsip, Gemini descriptor, Archive.org push).
+    """
+    print("\n── Setup Pipeline Guard ──\n")
+    deps = ["google-genai", "pydantic", "internetarchive", "requests"]
+    run([sys.executable, "-m", "pip", "install", *deps])
+    print("\n✓  Setup Pipeline Guard selesai.\n")
 
 
 # ── CLI ────────────────────────────────────────────────────────────────────
@@ -244,8 +255,8 @@ def main():
     )
     parser.add_argument(
         "mode",
-        choices=["record", "transcript", "hybrid"],
-        help="Mode: 'record' (rekam), 'transcript' (transkripsi), atau 'hybrid' (keduanya)",
+        choices=["record", "transcript", "hybrid", "guard"],
+        help="Mode: 'record', 'transcript', 'hybrid', atau 'guard' (Pipeline Guard & Gemini descriptor)",
     )
 
     args = parser.parse_args()
@@ -257,6 +268,8 @@ def main():
     elif args.mode == "hybrid":
         setup_record()
         setup_transcript()
+    elif args.mode == "guard":
+        setup_guard()
 
 
 if __name__ == "__main__":
