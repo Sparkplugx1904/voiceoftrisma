@@ -112,12 +112,17 @@ async function handleStats(request: Request, env: Env): Promise<Response> {
 
 	try {
 		const res = await fetch(`${STATS_URL}&t=${Date.now()}`, { signal: AbortSignal.timeout(8000) });
-		const text = await res.text();
-		return new Response(text, {
-			headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" },
-		});
+		if (!res.ok) {
+			const fallback = await d1GetJson(env.DB, KV_KEY_LAST);
+			if (fallback) return json(fallback);
+			return json({ error: "Gagal terhubung ke server radio" }, 502);
+		}
+		const data = await res.json();
+		return json(data, 200, { "Cache-Control": "public, max-age=3, s-maxage=5" });
 	} catch {
-		return json({ error: "Gagal terhubung ke server radio" }, 500);
+		const fallback = await d1GetJson(env.DB, KV_KEY_LAST);
+		if (fallback) return json(fallback);
+		return json({ error: "Gagal terhubung ke server radio" }, 502);
 	}
 }
 

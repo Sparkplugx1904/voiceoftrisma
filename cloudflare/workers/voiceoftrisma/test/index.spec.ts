@@ -1,7 +1,7 @@
 import { env, createExecutionContext, waitOnExecutionContext, SELF, applyD1Migrations } from "cloudflare:test";
 import { beforeAll, describe, it, expect } from "vitest";
 import { adminRoutes } from "../src/admin";
-import { verifyToken, signToken } from "../src/shared";
+import { verifyToken, signToken, Env } from "../src/shared";
 import { rateLimited, RL_WINDOW_MS } from "../src/index";
 
 const IncomingRequest = Request<unknown, IncomingRequestCfProperties>;
@@ -288,6 +288,48 @@ describe("router worker gabungan", () => {
 		const res = await SELF.fetch("https://example.com/api/login", { method: "OPTIONS" });
 		expect(res.status).toBe(204);
 		expect(res.headers.get("Access-Control-Allow-Methods")).toContain("POST");
+	});
+
+	it("security headers (nosniff, frame-options) terpasang di respons", async () => {
+		const res = await SELF.fetch("https://example.com/api/health");
+		expect(res.headers.get("X-Content-Type-Options")).toBe("nosniff");
+		expect(res.headers.get("X-Frame-Options")).toBe("DENY");
+	});
+
+	it("logout mencabut token yang diterbitkan sebelumnya (anti session replay)", async () => {
+		const store = new Map<string, string>();
+		const testEnv = { ...fakeEnv(), DB: memD1(store) } as unknown as Env;
+		const logoutRoute = adminRoutes.find((r) => r.method === "POST" && r.pattern === "/api/logout");
+		expect(logoutRoute).toBeDefined();
+
+		const token = await signToken(testEnv, "test-admin");
+		const validBefore = await verifyToken(testEnv, token);
+		expect(validBefore?.u).toBe("test-admin");
+
+		const delay1 = Promise.withResolvers<void>();
+		setTimeout(delay1.resolve, 10);
+		await delay1.promise;
+
+		// Request logout menggunakan token
+		const logoutReq = new IncomingRequest("https://example.com/api/logout", {
+			method: "POST",
+			headers: { Authorization: `Bearer ${token}` },
+		});
+		const logoutRes = await logoutRoute!.handler(logoutReq, testEnv, createExecutionContext());
+		expect(logoutRes.status).toBe(200);
+
+		// Token lama harus ditolak setelah logout
+		const validAfter = await verifyToken(testEnv, token);
+		expect(validAfter).toBeNull();
+
+		const delay2 = Promise.withResolvers<void>();
+		setTimeout(delay2.resolve, 10);
+		await delay2.promise;
+
+		// Token baru yang dibuat setelah logout harus tetap valid
+		const newToken = await signToken(testEnv, "test-admin");
+		const validNew = await verifyToken(testEnv, newToken);
+		expect(validNew?.u).toBe("test-admin");
 	});
 
 	/* ---------------- Anti-DDoS layer-7 (unit test limiter) ---------------- */

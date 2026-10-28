@@ -50,6 +50,9 @@ export const CORS_HEADERS: Record<string, string> = {
 	"Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
 	"Access-Control-Allow-Headers": "Content-Type, Authorization",
 	"Access-Control-Max-Age": "86400",
+	"X-Content-Type-Options": "nosniff",
+	"X-Frame-Options": "DENY",
+	"Referrer-Policy": "strict-origin-when-cross-origin",
 };
 
 export function withCors(response: Response): Response {
@@ -113,8 +116,9 @@ const TOKEN_TTL_SECONDS = 7 * 24 * 3600; // token berlaku 7 hari
 
 export async function signToken(env: Env, username: string): Promise<string> {
 	if (!env.SESSION_SECRET) throw new Error("SESSION_SECRET belum dikonfigurasi");
+	const nowMs = Date.now();
 	const payload = b64url(
-		JSON.stringify({ u: username, exp: Math.floor(Date.now() / 1000) + TOKEN_TTL_SECONDS })
+		JSON.stringify({ u: username, iat: nowMs, exp: Math.floor(nowMs / 1000) + TOKEN_TTL_SECONDS })
 	);
 	const sig = await hmac(env.SESSION_SECRET, payload);
 	return `${payload}.${sig}`;
@@ -130,9 +134,20 @@ export async function verifyToken(env: Env, token: string): Promise<{ u: string 
 	if (!timingSafeEqual(sig, expected)) return null;
 
 	try {
-		const payload = JSON.parse(b64urlDecode(payloadB64)) as { u?: unknown; exp?: unknown };
+		const payload = JSON.parse(b64urlDecode(payloadB64)) as { u?: unknown; exp?: unknown; iat?: unknown };
 		if (typeof payload.u !== "string" || typeof payload.exp !== "number") return null;
-		if (payload.exp < Math.floor(Date.now() / 1000)) return null; // kedaluwarsa
+		const now = Math.floor(Date.now() / 1000);
+		if (payload.exp < now) return null; // kedaluwarsa
+
+		// Verifikasi pembatalan token (revocation check, misalnya setelah admin logout)
+		if (env.DB) {
+			const revokedBefore = (await d1GetJson(env.DB, "auth_revoked_before")) as number | null;
+			if (typeof revokedBefore === "number" && revokedBefore > 0) {
+				const tokenIat = typeof payload.iat === "number" ? payload.iat : (payload.exp - TOKEN_TTL_SECONDS) * 1000;
+				if (tokenIat <= revokedBefore) return null;
+			}
+		}
+
 		return { u: payload.u };
 	} catch {
 		return null;

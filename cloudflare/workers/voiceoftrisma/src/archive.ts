@@ -76,8 +76,15 @@ async function handleArchive(request: Request, env: Env): Promise<Response> {
 		);
 	}
 
-	// Sort
-	const [field, direction] = sort.split(":");
+	// Sort (dibatasi field yang sah untuk mencegah property lookup sembarangan)
+	const ALLOWED_SORT_FIELDS: Record<string, true> = {
+		publicdate: true,
+		title: true,
+		downloads: true,
+		id: true,
+	};
+	const [rawField, direction] = sort.split(":");
+	const field = ALLOWED_SORT_FIELDS[rawField] ? rawField : "publicdate";
 	items.sort((a, b) => {
 		let valA = a[field] ?? 0;
 		let valB = b[field] ?? 0;
@@ -97,13 +104,17 @@ async function handleArchive(request: Request, env: Env): Promise<Response> {
 		resultItems = items;
 	}
 
-	return json({
-		status: "success",
-		total_results: totalItems,
-		current_page: page,
-		total_pages: Math.ceil(totalItems / hitsLimit),
-		data: resultItems,
-	});
+	return json(
+		{
+			status: "success",
+			total_results: totalItems,
+			current_page: page,
+			total_pages: Math.ceil(totalItems / hitsLimit),
+			data: resultItems,
+		},
+		200,
+		{ "Cache-Control": "public, max-age=180, s-maxage=300, stale-while-revalidate=60" }
+	);
 }
 
 export const archiveRoutes: Route[] = [

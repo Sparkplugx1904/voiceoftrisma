@@ -92,19 +92,25 @@ interface RateLimitResult {
 	justLocked: boolean; // true hanya pada percobaan yang MENTIMBULKAN blok (untuk catat login_locked sekali)
 }
 
+const inMemoryLockedIPs = new Map<string, number>();
+
 async function checkRateLimit(request: Request, env: Env): Promise<RateLimitResult> {
 	const ip = request.headers.get("CF-Connecting-IP") || request.headers.get("True-Client-IP") || "unknown";
-	const key = `login_rl:${ip}`;
 	const now = Date.now();
 
+	const lockUntil = inMemoryLockedIPs.get(ip);
+	if (lockUntil && lockUntil > now) {
+		const retryAfterSeconds = Math.max(1, Math.ceil((lockUntil - now) / 1000));
+		return { allowed: false, retryAfterSeconds, justLocked: false };
+	}
+
+	const key = `login_rl:${ip}`;
 	let entry = (await d1GetJson(env.DB, key)) as { count: number; windowStart: number } | null;
 
 	if (!entry || now - entry.windowStart > LOGIN_WINDOW_MS) {
-		// Jendela baru (atau data lama kedaluwarsa): reset counter utk IP ini.
 		await d1SetJson(env.DB, key, { count: 1, windowStart: now });
+		inMemoryLockedIPs.delete(ip);
 
-		// Hygiene: sesekali buang key rate-limit yang sudah basi supaya tabel
-		// tidak membesar tanpa batas oleh IP yang hanya lewat sekali.
 		if (Math.random() < 0.01) {
 			await env.DB.prepare(
 				"DELETE FROM kv_store WHERE key LIKE 'login_rl:%' AND json_extract(value, '$.windowStart') < ?"
@@ -118,15 +124,21 @@ async function checkRateLimit(request: Request, env: Env): Promise<RateLimitResu
 	}
 
 	entry.count += 1;
-	await d1SetJson(env.DB, key, entry);
+	const isLocked = entry.count > LOGIN_MAX_ATTEMPTS;
+	const isJustLocked = entry.count === LOGIN_MAX_ATTEMPTS + 1;
 
-	if (entry.count > LOGIN_MAX_ATTEMPTS) {
+	// Hanya tulis ke D1 jika belum locked atau baru tepat transisi locked (hemat kuota tulis D1)
+	if (!isLocked || isJustLocked) {
+		await d1SetJson(env.DB, key, entry);
+	}
+
+	if (isLocked) {
 		const retryAfterSeconds = Math.max(1, Math.ceil((LOGIN_WINDOW_MS - (now - entry.windowStart)) / 1000));
+		inMemoryLockedIPs.set(ip, entry.windowStart + LOGIN_WINDOW_MS);
 		return {
 			allowed: false,
 			retryAfterSeconds,
-			// Catat lock hanya pada transisi pertama (count == MAX+1), bukan tiap spam.
-			justLocked: entry.count === LOGIN_MAX_ATTEMPTS + 1,
+			justLocked: isJustLocked,
 		};
 	}
 	return { allowed: true, justLocked: false };
@@ -345,10 +357,8 @@ async function handleLogin(request: Request, env: Env): Promise<Response> {
 	const passOk = await secureEqual(password, env.ADMIN_PASSWORD);
 
 	if (!userOk || !passOk) {
-		// Audit trail: login gagal dicatat (username + info akses + IP). Aman
-		// dari banjir log karena checkRateLimit membatasi ≤5 percobaan/10 menit/IP,
-		// dan log dibatasi LOGS_MAX entri.
-		await appendLog(env, request, "login_failed", { user: username });
+		const safeUser = username.length > 30 ? username.slice(0, 15) + "..." : username;
+		await appendLog(env, request, "login_failed", { user: safeUser });
 		return json({ error: "Username atau password salah." }, 401);
 	}
 
@@ -489,6 +499,11 @@ async function handleLogout(request: Request, env: Env): Promise<Response> {
 	const auth = await requireAuth(request, env);
 	if (!auth) {
 		return json({ error: "Unauthorized. Token tidak valid atau kedaluwarsa." }, 401);
+	}
+	try {
+		await d1SetJson(env.DB, "auth_revoked_before", Date.now());
+	} catch (e) {
+		console.error("Gagal mencatat revokasi token saat logout:", e);
 	}
 	await appendLog(env, request, "logout", { user: auth.u });
 	return json({ ok: true });

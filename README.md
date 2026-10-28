@@ -40,7 +40,7 @@
   </a>
 
   <!-- Badge untuk About Madyapadma dengan tanda seru di lingkaran -->
-  <a href="https://github.com/sparkplugx1904/voiceoftrisma/blob/main/ABOUT%20MADYAPADMA.md" target="_blank">
+  <a href="https://github.com/sparkplugx1904/voiceoftrisma/blob/main/ABOUT.md" target="_blank">
     <img src="https://img.shields.io/badge/About%20Madyapadma-lightgray?style=for-the-badge" alt="About Madyapadma"/>
   </a>
 </p>
