@@ -19,7 +19,7 @@
 
 <p align="center">
   <a href="https://madyapadma-online.com/" target="_blank">
-    <img src="https://github.com/Sparkplugx1904/voiceoftrisma/blob/main/assets/banner/mptv_banner.png?raw=true" alt="VOT-Radio Denpasar" />
+    <img src="https://github.com/sparkplugx1904/voiceoftrisma/blob/main/assets/banner/mptv_banner.png?raw=true" alt="VOT-Radio Denpasar" />
   </a>
 </p>
 
@@ -30,7 +30,7 @@
   </a>
 
    <!-- Badge untuk Theme -->
-  <a href="https://github.com/Sparkplugx1904/voiceoftrisma/blob/main/template/THEME.md" target="_blank">
+  <a href="https://github.com/sparkplugx1904/voiceoftrisma/blob/main/template/THEME.md" target="_blank">
     <img src="https://img.shields.io/badge/Theme-blue?style=for-the-badge&logo=github&logoColor=white" alt="Theme"/>
   </a>
 
@@ -40,7 +40,7 @@
   </a>
 
   <!-- Badge untuk About Madyapadma dengan tanda seru di lingkaran -->
-  <a href="https://github.com/Sparkplugx1904/voiceoftrisma/blob/main/ABOUT%20MADYAPADMA.md" target="_blank">
+  <a href="https://github.com/sparkplugx1904/voiceoftrisma/blob/main/ABOUT%20MADYAPADMA.md" target="_blank">
     <img src="https://img.shields.io/badge/About%20Madyapadma-lightgray?style=for-the-badge" alt="About Madyapadma"/>
   </a>
 </p>
@@ -136,5 +136,5 @@ Kami senang mendengar dari Anda dan siap untuk berdiskusi tentang bagaimana kita
 </p>
 
 <p align="center">
-  <sub>Dibuat dengan ❤️ oleh <a href="https://github.com/Sparkplugx1904" target="_blank">Sparkplugx1904</a></sub>
+  <sub>Dibuat dengan ❤️ oleh <a href="https://github.com/sparkplugx1904" target="_blank">sparkplugx1904</a></sub>
 </p>

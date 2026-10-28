@@ -8,7 +8,7 @@
 
 import { Env, Route, json } from "./shared";
 
-const GITHUB_OWNER = "Sparkplugx1904";
+const GITHUB_OWNER = "sparkplugx1904";
 const GITHUB_REPO = "voiceoftrisma";
 const WORKFLOWS = ["main+transcript_v1.0.yml", "main+transcript_v2.0.yml"];
 

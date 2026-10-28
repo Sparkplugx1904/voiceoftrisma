@@ -22,7 +22,7 @@ import time
 import urllib.request
 from urllib.error import HTTPError, URLError
 
-GH_BASE = "https://github.com/Sparkplugx1904/voiceoftrisma/raw/refs/heads/main"
+GH_BASE = "https://github.com/sparkplugx1904/voiceoftrisma/raw/refs/heads/main"
 
 
 # ── helpers ────────────────────────────────────────────────────────────────

@@ -19,7 +19,7 @@ jobs:
       - name: Checkout template
         uses: actions/checkout@v4
         with:
-          repository: Sparkplugx1904/voiceoftrisma
+          repository: sparkplugx1904/voiceoftrisma
           sparse-checkout: |
             template/main
           path: template
