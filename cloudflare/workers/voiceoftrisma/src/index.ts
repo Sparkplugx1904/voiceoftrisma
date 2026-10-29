@@ -18,7 +18,7 @@ import { adminRoutes } from "./admin";
 import { statsRoutes, recordSample } from "./stream-stats";
 import { archiveRoutes, updateArchiveCache } from "./archive";
 import { metricsRoutes, updateMetrics } from "./metrics";
-import { workflowRoutes, triggerWorkflows } from "./workflow";
+import { triggerWorkflows } from "./workflow";
 import { RateLimitDO } from "./rate-limit";
 // Re-export WAJIB: tanpa ini class DO tidak ikut ter-bundle oleh wrangler.
 export { RateLimitDO };
@@ -27,7 +27,7 @@ function handleRoot(_request: Request, _env: Env): Response {
 	return json({
 		ok: true,
 		service: "voiceoftrisma",
-		endpoints: ["/api/*", "/stats", "/archive", "/metrics", "/workflow"],
+		endpoints: ["/api/*", "/stats", "/archive", "/metrics"],
 		time: new Date().toISOString(),
 	});
 }
@@ -38,7 +38,6 @@ const ROUTES: Route[] = [
 	...statsRoutes,
 	...archiveRoutes,
 	...metricsRoutes,
-	...workflowRoutes,
 ];
 
 const compiledRoutes = ROUTES.map((r) => ({ ...r, pattern: new URLPattern({ pathname: r.pattern }) }));

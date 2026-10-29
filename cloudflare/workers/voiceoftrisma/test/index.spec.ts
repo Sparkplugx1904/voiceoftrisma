@@ -274,13 +274,9 @@ describe("router worker gabungan", () => {
 		expect(body.message).toBe("Data belum tersedia");
 	});
 
-	it("GET /workflow -> info", async () => {
+	it("GET /workflow -> 404 (tidak ada rute HTTP untuk workflow - cron only)", async () => {
 		const res = await SELF.fetch("https://example.com/workflow");
-		expect(res.status).toBe(200);
-		const body = (await res.json()) as { ok: boolean; repo: string; github_auth: string };
-		expect(body.ok).toBe(true);
-		expect(body.repo).toBe("sparkplugx1904/voiceoftrisma");
-		expect(body.github_auth).toBeDefined();
+		expect(res.status).toBe(404);
 	});
 
 	it("route tak dikenal -> 404", async () => {

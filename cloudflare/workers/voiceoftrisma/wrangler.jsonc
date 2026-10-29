@@ -1,13 +1,12 @@
 /**
  * Worker gabungan VOICE OF TRISMA
  * ---------------------------------------------------------
- * Satu worker, lima modul (route prefix dirapikan):
+ * Empat endpoint publik/admin (route prefix dirapikan):
  *   /api/*    -> admin (login, jadwal, riwayat, log)   [D1 kv_store]
  *   /stats    -> stream-stats (proxy live + ?history=1) [D1 samples]
  *   /archive  -> cache arsip Archive.org                [D1 kv_store]
  *   /metrics  -> snapshot stats icecast (15:00-19:00 WITA) [D1 kv_store]
- *   /workflow -> stub info (kerja lewat cron saja)
- *
+ *   (Modul workflow trigger berjalan murni via internal cron — tanpa rute HTTP)
  * Cron (named triggers — event.cron dipakai untuk routing):
  *   stream-stats : setiap 5 menit  poll icecast -> sample D1
  *   archive      : setiap 30 menit rekap uploads Archive.org -> D1

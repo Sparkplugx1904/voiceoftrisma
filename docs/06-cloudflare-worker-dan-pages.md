@@ -19,12 +19,12 @@ https://voiceoftrisma.anandapradnyana68.workers.dev
 ├── /stats         --> Proxy CORS live status Klikhost & time-series 6 jam D1
 ├── /archive       --> Cache katalog rekaman siaran dari Archive.org
 ├── /metrics       --> Snapshot statistik pendengar (aktif jam 15:00-19:00 WITA)
-├── /api/*         --> Backend Admin & Pengelolaan Jadwal Siaran
-│   ├── /api/login   (Otentikasi admin via SESSION_SECRET HMAC)
-│   ├── /api/jadwal  (GET jadwal publik & PUT pembaruan jadwal admin)
-│   └── /api/logs    (Riwayat audit aktivitas admin)
-└── /workflow      --> Info pemicu GitHub Actions cron harian
+└── /api/*         --> Backend Admin & Pengelolaan Jadwal Siaran
+    ├── /api/login   (Otentikasi admin via SESSION_SECRET HMAC)
+    ├── /api/jadwal  (GET jadwal publik & PUT pembaruan jadwal admin)
+    └── /api/logs    (Riwayat audit aktivitas admin)
 ```
+*(Pemicu GitHub Actions berjalan murni via scheduled cron runtime internal — tanpa rute HTTP publik).*
 
 ---
 
